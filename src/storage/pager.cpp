@@ -156,11 +156,11 @@ Err Pager::get(const int32_t page_id, char** page) {
 
 Err Pager::alloc(int32_t* page_id, char** page) {
   const int32_t id = static_cast<int32_t>(page_count_);
-  // Extend the file so a reader of the file size agrees with page_count_ even before the page is
-  // written back.
-  char zero[kPageSize];
-  std::memset(zero, 0, sizeof(zero));
-  if (!pwrite_all(fd_, zero, kPageSize, static_cast<off_t>(id) * kPageSize)) return Err::IoError;
+  // Extend the file without writing a zero page: ftruncate yields a hole that reads back as zeros, and
+  // the page is written once, when it is eventually flushed. Writing the zero page here would double
+  // the bytes the data file costs on disk.
+  const off_t new_size = static_cast<off_t>(id + 1) * kPageSize;
+  if (ftruncate(fd_, new_size) != 0) return Err::IoError;
   ++page_count_;
 
   Err err = Err::Ok;

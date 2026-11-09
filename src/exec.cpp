@@ -53,39 +53,35 @@ bool eval_const_int(const Expr& e, int64_t* out) {
 
 // Parses a vector from a bare list [1,2,3] or its quoted form '[1,2,3]' - the task package fixes the
 // spelling, so both are accepted.
+// Scans "[1,2,3]" (or the quoted form) with strtof: parsing a 128 dimension vector through the SQL
+// tokenizer would allocate a token per number, which is the load path's dominant cost otherwise.
 bool vector_from_expr(const Expr& e, std::vector<float>* out) {
   if (e.kind == ExprKind::VectorLit) {
     *out = e.vec;
     return true;
   }
   if (e.kind != ExprKind::StrLit) return false;
-  std::vector<Token> toks;
-  std::string lerr;
-  if (!tokenize(e.s, &toks, &lerr)) return false;
-  size_t i = 0;
-  if (i >= toks.size() || toks[i].kind != Tok::Punct || toks[i].text != "[") return false;
-  ++i;
-  if (i < toks.size() && toks[i].kind == Tok::Punct && toks[i].text == "]") {
-    ++i;
-  } else {
-    for (;;) {
-      if (i >= toks.size()) return false;
-      double v = 0.0;
-      if (toks[i].kind == Tok::Integer) {
-        v = static_cast<double>(toks[i].i);
-      } else if (toks[i].kind == Tok::Float) {
-        v = toks[i].f;
-      } else {
-        return false;
-      }
-      out->push_back(static_cast<float>(v));
-      ++i;
-      if (i < toks.size() && toks[i].kind == Tok::Punct && toks[i].text == ",") { ++i; continue; }
-      if (i < toks.size() && toks[i].kind == Tok::Punct && toks[i].text == "]") { ++i; break; }
-      return false;
+  const char* p = e.s.c_str();
+  const char* end = p + e.s.size();
+  while (p < end && (*p == ' ' || *p == '\t')) ++p;
+  if (p >= end || *p != '[') return false;
+  ++p;
+  out->clear();
+  while (p < end) {
+    while (p < end && (*p == ' ' || *p == '\t' || *p == ',')) ++p;
+    if (p < end && *p == ']') {
+      ++p;
+      while (p < end && (*p == ' ' || *p == '\t')) ++p;
+      return p == end;
     }
+    if (p >= end) return false;
+    char* next = nullptr;
+    const float v = std::strtof(p, &next);
+    if (next == p) return false;
+    out->push_back(v);
+    p = next;
   }
-  return i + 1 == toks.size();   // only the terminating End token may follow
+  return false;
 }
 
 bool is_l2(const Expr& e) { return e.kind == ExprKind::Func && equals_ci(e.name, "L2_DISTANCE"); }

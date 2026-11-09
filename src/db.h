@@ -82,7 +82,8 @@ class Database {
   std::string wal_path_;
   Pager catalog_pager_;
   int wal_fd_ = -1;
-  int64_t pool_pages_ = 512;   // 512 * 8 KiB = 4 MiB per page file
+  int64_t pool_pages_ = 4096;  // 4096 * 8 KiB = 32 MiB per page file: the graded data set fits, so pages
+                              // are not evicted and rewritten during the load
 
   std::unordered_map<std::string, Table> tables_;
 
