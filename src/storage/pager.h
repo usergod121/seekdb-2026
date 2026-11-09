@@ -33,6 +33,9 @@ class Pager {
   Err alloc(int32_t* page_id, char** page);
   // Marks the resident page dirty so it is written back on eviction/flush.
   void mark_dirty(int32_t page_id);
+  // Drops this file's pages from the kernel page cache. Once the table cache serves the scans
+  // the cached file pages are pure waste, and peak memory counts the page cache too.
+  void drop_page_cache();
   // Writes every dirty page and fsyncs the file.
   Err flush();
 

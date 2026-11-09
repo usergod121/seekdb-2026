@@ -176,6 +176,13 @@ Err Pager::alloc(int32_t* page_id, char** page) {
   return Err::Ok;
 }
 
+void Pager::drop_page_cache()
+{
+  if (fd_ >= 0) {
+    (void)posix_fadvise(fd_, 0, 0, POSIX_FADV_DONTNEED);
+  }
+}
+
 void Pager::mark_dirty(const int32_t page_id) {
   auto it = frames_.find(page_id);
   if (it != frames_.end()) it->second->dirty = true;
