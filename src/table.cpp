@@ -213,8 +213,10 @@ Err Table::build_cache() {
     cache_rows.push_back(row);
   }
   cache_valid = true;
-  // Scans are served from this cache now, so the file pages the decode pass pulled in are
-  // dropped: they would otherwise stay in the page cache and count towards peak memory.
+  // Scans are served from this cache now, so the file pages the decode pass pulled in are released:
+  // both the buffer-pool frames and the kernel's page cache would otherwise count towards peak memory
+  // for the rest of the run.
+  pager.release_clean_frames();
   pager.drop_page_cache();
   return Err::Ok;
 }

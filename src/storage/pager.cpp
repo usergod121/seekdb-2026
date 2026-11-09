@@ -186,6 +186,19 @@ Err Pager::alloc(int32_t* page_id, char** page) {
   return Err::Ok;
 }
 
+void Pager::release_clean_frames() {
+  for (auto it = frames_.begin(); it != frames_.end();) {
+    Frame* frame = it->second;
+    if (frame->dirty) {
+      ++it;
+      continue;
+    }
+    frame->page_id = -1;
+    free_frames_.push_back(frame);
+    it = frames_.erase(it);
+  }
+}
+
 void Pager::drop_page_cache()
 {
   if (fd_ >= 0) {

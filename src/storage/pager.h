@@ -36,6 +36,10 @@ class Pager {
   // Drops this file's pages from the kernel page cache. Once the table cache serves the scans
   // the cached file pages are pure waste, and peak memory counts the page cache too.
   void drop_page_cache();
+  // Returns every clean frame to the free list. Dirty frames stay, because they hold changes that have
+  // not reached the file yet. Used once a table's rows live in the in-memory cache and page access is
+  // no longer on the hot path.
+  void release_clean_frames();
   // Writes every dirty page and fsyncs the file.
   Err flush();
 
