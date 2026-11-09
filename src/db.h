@@ -92,6 +92,8 @@ class Database {
   bool in_txn_ = false;
   // Set when the open transaction contains DDL, so COMMIT writes the catalog.
   bool txn_ddl_ = false;
+  // Set while the WAL is being replayed: replay must not write the log it is reading from.
+  bool replaying_ = false;
   std::vector<UndoRow> undo_rows_;
   std::vector<UndoDdl> undo_ddl_;
   std::vector<std::string> txn_log_;

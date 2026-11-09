@@ -112,8 +112,16 @@ Err Database::open(const std::string& data_dir) {
 
   wal_fd_ = ::open(wal_path_.c_str(), O_CREAT | O_RDWR | O_APPEND, 0644);
   if (wal_fd_ < 0) return Err::IoError;
+  replaying_ = true;
   const Err rc = replay_wal();
-  return rc;
+  replaying_ = false;
+  if (rc != Err::Ok) return rc;
+  // Recovery ends with a checkpoint: the replayed state reaches the pages and the log is emptied, so a
+  // crash during recovery never leaves work that has to be replayed twice.
+  if (dirty_) {
+    if (checkpoint() != Err::Ok) return Err::IoError;
+  }
+  return Err::Ok;
 }
 
 Err Database::close() {
@@ -263,7 +271,14 @@ Err Database::replay_wal() {
       ++pos;
       for (const std::string& sql : pending) {
         const Result r = execute(sql);
-        if (r.err == Err::Ok) changed = true;
+        // A statement whose effect is already in the pages (a checkpoint that was interrupted after
+        // flushing them) is not an error during recovery: skipping it converges on the same state.
+        if (r.err == Err::Ok) {
+          changed = true;
+        } else if (r.err != Err::DuplicateKey && r.err != Err::TableExists) {
+          std::fprintf(stderr, "[recovery] skipped a log record: %s: %s\n", err_name(r.err),
+                       r.message.c_str());
+        }
       }
       pending.clear();
       continue;
@@ -428,6 +443,8 @@ Result Database::execute(const std::string& sql_text) {
     dirty_ = true;
     if (in_txn_) {
       txn_log_.push_back(sql);
+    } else if (replaying_) {
+      // The statement already came from the log; writing it back would duplicate every record.
     } else {
       if (wal_append(sql) != Err::Ok || wal_commit() != Err::Ok) {
         res.err = Err::IoError;

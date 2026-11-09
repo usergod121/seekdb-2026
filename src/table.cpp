@@ -1,5 +1,7 @@
 #include "table.h"
 
+#include <cstdlib>
+
 #include <cstring>
 
 #include "sql/lexer.h"
@@ -51,6 +53,10 @@ int Table::find_column(const std::string& name) const {
 }
 
 Err Table::open_pages(const std::string& path, const int64_t pool_pages) {
+  if (const char* budget = ::getenv("MVDB_CACHE_BUDGET_BYTES")) {
+    const long long value = std::atoll(budget);
+    if (value > 0) cache_budget_bytes = value;
+  }
   if (pager.open(path, pool_pages) != Err::Ok) return Err::IoError;
   return heap.open(&pager, 0);
 }

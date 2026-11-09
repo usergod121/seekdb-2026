@@ -14,7 +14,7 @@ void Writer::bye() {
 
 void Writer::result(const Result& r) {
   if (r.err != Err::Ok) {
-    std::fprintf(out_, "ERROR %d %s", static_cast<int>(r.err), err_text(r.err));
+    std::fprintf(out_, "ERROR %s %s", err_name(r.err), err_text(r.err));
     if (!r.message.empty()) std::fprintf(out_, ": %s", r.message.c_str());
     std::fputc('\n', out_);
     std::fflush(out_);

@@ -25,6 +25,27 @@ enum class Err {
   TooManyRows,
 };
 
+// The wire name of an error. The public package spells errors semantically (an `error` assertion names
+// something like `duplicate_key`), so the code that goes on the wire is the semantic name.
+inline const char* err_name(Err e) {
+  switch (e) {
+    case Err::Ok: return "ok";
+    case Err::SyntaxError: return "syntax_error";
+    case Err::NotSupported: return "unsupported_sql";
+    case Err::TableNotFound: return "table_not_found";
+    case Err::TableExists: return "table_exists";
+    case Err::ColumnNotFound: return "column_not_found";
+    case Err::ColumnExists: return "column_exists";
+    case Err::DuplicateKey: return "duplicate_key";
+    case Err::VectorDimMismatch: return "dimension_mismatch";
+    case Err::ValueOverflow: return "value_out_of_range";
+    case Err::IoError: return "io_error";
+    case Err::TxnBusy: return "transaction_busy";
+    case Err::TooManyRows: return "too_many_rows";
+  }
+  return "unknown_error";
+}
+
 inline const char* err_text(Err e) {
   switch (e) {
     case Err::Ok: return "OK";

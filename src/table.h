@@ -50,6 +50,8 @@ struct Table {
   std::vector<std::vector<char>> cache_str_data;
   std::vector<std::vector<uint32_t>> cache_str_off;
   bool cache_valid = false;
+  // Rows are cached only while they fit this budget; beyond it every scan goes through the paged path.
+  // MVDB_CACHE_BUDGET_BYTES overrides it so the paged path can be tested with a small data set.
   int64_t cache_budget_bytes = 64LL * 1024 * 1024;
 
   Err build_cache();
