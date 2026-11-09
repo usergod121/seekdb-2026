@@ -1,0 +1,5 @@
+{
+  "schema": "placeholder",
+  "note": "Agent prompt learning material for the extra round is assembled at the end of development from the recorded evidence journal. The platform default path is agent/conversation.json; a copy also lives at the repository root because the shipped skeleton had an empty conversation.json there.",
+  "status": "to-be-filled"
+}
