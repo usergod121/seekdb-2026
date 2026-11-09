@@ -162,9 +162,13 @@ Err Heap::update(const Rid& rid, const char* payload, const int32_t len, Rid* ne
     *moved = false;
     return Err::Ok;
   }
-  // Grow: free the old slot and append the new payload.
+  // Grow: append the new version first, then free the old slot. Inserting first means a failed insert
+  // leaves the live row untouched; freeing afterwards is the step that must not be skipped, or the old
+  // version stays visible next to the new one.
+  const Err rc = insert(payload, len, new_rid);
+  if (rc != Err::Ok) return rc;
   *moved = true;
-  return insert(payload, len, new_rid);
+  return remove(rid);
 }
 
 Err Heap::live_rows(std::vector<Rid>* out) {

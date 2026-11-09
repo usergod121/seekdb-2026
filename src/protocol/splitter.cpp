@@ -4,6 +4,14 @@ namespace mv {
 
 void Splitter::feed(const std::string& chunk, std::vector<std::string>* out) {
   buf_ += chunk;
+  if (start_of_stream_ && buf_.size() >= 3) {
+    start_of_stream_ = false;
+    if (static_cast<unsigned char>(buf_[0]) == 0xEF &&
+        static_cast<unsigned char>(buf_[1]) == 0xBB &&
+        static_cast<unsigned char>(buf_[2]) == 0xBF) {
+      buf_.erase(0, 3);
+    }
+  }
   size_t start = 0;
   size_t i = 0;
   const size_t n = buf_.size();

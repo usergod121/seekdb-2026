@@ -28,6 +28,8 @@ struct Result {
   std::vector<std::string> col_names;
   std::vector<std::vector<std::string>> rows;
   bool is_query = false;
+  // Rows inserted, updated or deleted by this statement; the public assertions compare it.
+  int64_t affected = 0;
 };
 
 class Database {

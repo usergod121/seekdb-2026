@@ -35,7 +35,7 @@ void Writer::result(const Result& r) {
     }
     std::fputs("END\n", out_);
   } else {
-    std::fputs("OK\n", out_);
+    std::fprintf(out_, "OK %lld\n", static_cast<long long>(r.affected));
   }
   std::fflush(out_);
 }

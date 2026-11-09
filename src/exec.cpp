@@ -505,6 +505,7 @@ Result Database::exec_insert(const Stmt& st, const bool replay) {
     t->pk_index[pk] = rid;
     ++t->live_rows;
     t->invalidate_cache();
+    ++r.affected;
   }
   return r;
 }
@@ -664,6 +665,22 @@ Result Database::exec_select(const Stmt& st) {
 
   const int64_t dims = t->dim();
 
+  // ORDER BY may name a projection alias ("ORDER BY distance" for L2_DISTANCE(embedding, ...) AS
+  // distance), so each order item is mapped to the expression it actually refers to first.
+  std::vector<const Expr*> order_exprs(st.order_by.size());
+  for (size_t i = 0; i < st.order_by.size(); ++i) {
+    const Expr* oe = st.order_by[i].expr.get();
+    if (oe->kind == ExprKind::Column) {
+      for (size_t p = 0; p < st.projections.size() && p < st.aliases.size(); ++p) {
+        if (!st.aliases[p].empty() && st.aliases[p] == oe->name) {
+          oe = st.projections[p].get();
+          break;
+        }
+      }
+    }
+    order_exprs[i] = oe;
+  }
+
   // Resolve the query vectors once per statement: parsing the literal per row would dominate the scan.
   struct L2Spec {
     std::vector<float> q;
@@ -684,7 +701,7 @@ Result Database::exec_select(const Stmt& st) {
     return true;
   };
   for (size_t i = 0; i < st.order_by.size(); ++i) {
-    if (!resolve_l2(*st.order_by[i].expr, &order_l2[i])) {
+    if (!resolve_l2(*order_exprs[i], &order_l2[i])) {
       r.err = Err::SyntaxError;
       r.message = "bad L2_DISTANCE arguments";
       return r;
@@ -865,7 +882,7 @@ Result Database::exec_select(const Stmt& st) {
         k.num = l2_distance(vec, order_l2[i].q.data(), dims);
       } else {
         Value v;
-        if (!eval_scalar(ctx, *st.order_by[i].expr, &v, &k, &perr)) {
+        if (!eval_scalar(ctx, *order_exprs[i], &v, &k, &perr)) {
           r.err = Err::SyntaxError;
           r.message = perr;
           return false;
@@ -1020,6 +1037,7 @@ Result Database::exec_update(const Stmt& st, const bool replay) {
     }
     t->pk_index[u.pk] = new_rid;
     t->invalidate_cache();
+    ++r.affected;
   }
   return r;
 }
@@ -1072,6 +1090,7 @@ Result Database::exec_delete(const Stmt& st, const bool replay) {
     t->pk_index.erase(u.pk);
     if (t->live_rows > 0) --t->live_rows;
     t->invalidate_cache();
+    ++r.affected;
   }
   return r;
 }

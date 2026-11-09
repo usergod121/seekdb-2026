@@ -21,6 +21,8 @@ class Splitter {
 
  private:
   std::string buf_;
+  // A .test file may start with a UTF-8 BOM, which belongs to the file and not to the first statement.
+  bool start_of_stream_ = true;
 };
 
 }  // namespace mv
