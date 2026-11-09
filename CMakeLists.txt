@@ -20,6 +20,8 @@ add_executable(minivectordb
   src/sql/lexer.cpp
   src/sql/parser.cpp
   src/table.cpp
+  src/storage/pager.cpp
+  src/storage/heap.cpp
   src/db.cpp
   src/exec.cpp
   src/protocol/splitter.cpp
