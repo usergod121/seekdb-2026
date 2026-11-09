@@ -15,6 +15,8 @@ endif()
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG -fno-rtti -fno-exceptions")
 add_compile_options(-Wall -Wextra -Wno-unused-parameter)
 
+find_package(Threads REQUIRED)
+
 add_executable(minivectordb
   src/main.cpp
   src/sql/lexer.cpp
@@ -23,11 +25,14 @@ add_executable(minivectordb
   src/storage/pager.cpp
   src/storage/heap.cpp
   src/storage/vec_kernel.cpp
+  src/storage/scan_pool.cpp
   src/db.cpp
   src/exec.cpp
   src/protocol/splitter.cpp
   src/protocol/writer.cpp
 )
+
+target_link_libraries(minivectordb PRIVATE Threads::Threads)
 
 target_include_directories(minivectordb PRIVATE src)
 

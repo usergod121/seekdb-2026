@@ -44,11 +44,24 @@ struct Table {
   std::vector<Row> cache_rows;
   std::vector<int64_t> cache_pks;
   std::vector<float> cache_vecs;    // flat: row i occupies [i*dim(), (i+1)*dim())
+  // Columnar copies of the scalar columns, so a WHERE clause reads a sequential array instead of
+  // following one heap pointer per row through Row::vals. cache_str_off[c] has rows + 1 entries.
+  std::vector<std::vector<int64_t>> cache_int_cols;
+  std::vector<std::vector<char>> cache_str_data;
+  std::vector<std::vector<uint32_t>> cache_str_off;
   bool cache_valid = false;
   int64_t cache_budget_bytes = 64LL * 1024 * 1024;
 
   Err build_cache();
-  void invalidate_cache() { cache_valid = false; cache_rows.clear(); cache_pks.clear(); cache_vecs.clear(); }
+  void invalidate_cache() {
+    cache_valid = false;
+    cache_rows.clear();
+    cache_pks.clear();
+    cache_vecs.clear();
+    cache_int_cols.clear();
+    cache_str_data.clear();
+    cache_str_off.clear();
+  }
   const float* cache_vec(const int64_t idx) const { return cache_vecs.data() + idx * dim(); }
 
   Err open_pages(const std::string& path, int64_t pool_pages);

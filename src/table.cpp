@@ -178,13 +178,33 @@ Err Table::build_cache() {
   cache_rows.clear();
   cache_pks.clear();
   cache_vecs.clear();
+  cache_int_cols.assign(columns.size(), {});
+  cache_str_data.assign(columns.size(), {});
+  cache_str_off.assign(columns.size(), {});
   cache_rows.reserve(rids.size());
   cache_pks.reserve(rids.size());
   if (dims > 0) cache_vecs.reserve(rids.size() * dims);
+  for (size_t col = 0; col < columns.size(); ++col) {
+    if (columns[col].type == ColType::BigInt) {
+      cache_int_cols[col].reserve(rids.size());
+    } else if (columns[col].type == ColType::Varchar) {
+      cache_str_off[col].reserve(rids.size() + 1);
+      cache_str_off[col].push_back(0);
+    }
+  }
   Row row;
   for (const Rid& rid : rids) {
     if (fetch_at(rid, &row) != Err::Ok) continue;
     cache_pks.push_back(row.vals[static_cast<size_t>(pk_col)].i);
+    for (size_t col = 0; col < columns.size(); ++col) {
+      if (columns[col].type == ColType::BigInt) {
+        cache_int_cols[col].push_back(row.vals[col].i);
+      } else if (columns[col].type == ColType::Varchar) {
+        const std::string& s = row.vals[col].s;
+        cache_str_data[col].insert(cache_str_data[col].end(), s.begin(), s.end());
+        cache_str_off[col].push_back(static_cast<uint32_t>(cache_str_data[col].size()));
+      }
+    }
     if (dims > 0) {
       if (static_cast<int64_t>(row.vec.size()) != dims) return Err::VectorDimMismatch;
       cache_vecs.insert(cache_vecs.end(), row.vec.begin(), row.vec.end());

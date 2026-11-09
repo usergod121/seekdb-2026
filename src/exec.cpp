@@ -4,7 +4,10 @@
 #include <cstdio>
 #include <cstring>
 
+#include <charconv>
+
 #include "db.h"
+#include "storage/scan_pool.h"
 #include "sql/lexer.h"
 #include "storage/vec_kernel.h"
 
@@ -53,8 +56,8 @@ bool eval_const_int(const Expr& e, int64_t* out) {
 
 // Parses a vector from a bare list [1,2,3] or its quoted form '[1,2,3]' - the task package fixes the
 // spelling, so both are accepted.
-// Scans "[1,2,3]" (or the quoted form) with strtof: parsing a 128 dimension vector through the SQL
-// tokenizer would allocate a token per number, which is the load path's dominant cost otherwise.
+// Scans "[1,2,3]" (or the quoted form) number by number: parsing a 128 dimension vector through the SQL
+// tokenizer would allocate a token per number, which would dominate the query path otherwise.
 bool vector_from_expr(const Expr& e, std::vector<float>* out) {
   if (e.kind == ExprKind::VectorLit) {
     *out = e.vec;
@@ -75,11 +78,19 @@ bool vector_from_expr(const Expr& e, std::vector<float>* out) {
       return p == end;
     }
     if (p >= end) return false;
-    char* next = nullptr;
-    const float v = std::strtof(p, &next);
-    if (next == p) return false;
+    // from_chars parses a plain decimal number without touching the locale and is the fastest portable
+    // way to do it; anything it rejects falls back to strtof so unusual spellings still work.
+    float v = 0.0f;
+    const std::from_chars_result parsed = std::from_chars(p, end, v);
+    if (parsed.ec == std::errc() && parsed.ptr != p) {
+      p = parsed.ptr;
+    } else {
+      char* next = nullptr;
+      v = std::strtof(p, &next);
+      if (next == p) return false;
+      p = next;
+    }
     out->push_back(v);
-    p = next;
   }
   return false;
 }
@@ -600,6 +611,18 @@ Pred compile_pred(const Expr* where, const Table& t) {
   return p;
 }
 
+inline bool cmp_op_holds(const int op, const int cmp) {
+  switch (op) {
+    case 0: return cmp == 0;
+    case 1: return cmp < 0;
+    case 2: return cmp <= 0;
+    case 3: return cmp > 0;
+    case 4: return cmp >= 0;
+    case 5: return cmp != 0;
+    default: return false;
+  }
+}
+
 inline bool cmp_holds(const CmpPred& p, const Value& v) {
   int cmp = 0;
   if (p.lit_is_str) {
@@ -609,15 +632,7 @@ inline bool cmp_holds(const CmpPred& p, const Value& v) {
     if (v.type != ColType::BigInt) return false;
     cmp = (v.i < p.lit_i) ? -1 : (v.i > p.lit_i ? 1 : 0);
   }
-  switch (p.op) {
-    case 0: return cmp == 0;
-    case 1: return cmp < 0;
-    case 2: return cmp <= 0;
-    case 3: return cmp > 0;
-    case 4: return cmp >= 0;
-    case 5: return cmp != 0;
-    default: return false;
-  }
+  return cmp_op_holds(p.op, cmp);
 }
 
 inline bool pred_holds(const Pred& p, const Row& row) {
@@ -634,6 +649,39 @@ struct HeapItem {
   int64_t cache_idx = -1;
   Rid rid;
 };
+
+// Filter work handed to the scan workers: the compiled predicate plus the table whose columnar cache it
+// reads. A plain function pointer keeps the per-row overhead to one indirect call.
+struct FastKeep {
+  const Table* table = nullptr;
+  const CmpPred* a = nullptr;
+  const CmpPred* b = nullptr;
+  bool use_b = false;
+};
+
+inline bool flat_holds(const Table& t, const CmpPred& p, const int64_t i) {
+  if (p.lit_is_str) {
+    const std::vector<uint32_t>& off = t.cache_str_off[static_cast<size_t>(p.col)];
+    const std::vector<char>& data = t.cache_str_data[static_cast<size_t>(p.col)];
+    const uint32_t begin = off[static_cast<size_t>(i)];
+    const size_t len = off[static_cast<size_t>(i) + 1] - begin;
+    const std::string& lit = p.lit_s;
+    const size_t common = len < lit.size() ? len : lit.size();
+    int cmp = common == 0 ? 0 : std::memcmp(data.data() + begin, lit.data(), common);
+    if (cmp == 0) cmp = (len < lit.size()) ? -1 : (len > lit.size() ? 1 : 0);
+    return cmp_op_holds(p.op, cmp);
+  }
+  const int64_t value = t.cache_int_cols[static_cast<size_t>(p.col)][static_cast<size_t>(i)];
+  const int cmp = (value < p.lit_i) ? -1 : (value > p.lit_i ? 1 : 0);
+  return cmp_op_holds(p.op, cmp);
+}
+
+bool fast_keep_row(const void* ctx, const int64_t row) {
+  const FastKeep& keep = *static_cast<const FastKeep*>(ctx);
+  if (!flat_holds(*keep.table, *keep.a, row)) return false;
+  if (keep.use_b && !flat_holds(*keep.table, *keep.b, row)) return false;
+  return true;
+}
 
 // Ranks before: smaller distance first and, among equal distances, the smaller primary key, which is the
 // tie order the task documents. Passing this to the heap algorithms puts the element that ranks last at
@@ -688,6 +736,10 @@ Result Database::exec_select(const Stmt& st) {
   };
   std::vector<L2Spec> order_l2(st.order_by.size());
   std::vector<L2Spec> proj_l2(st.projections.size());
+  // The same literal commonly appears twice in one statement (once in the projection, once in ORDER
+  // BY), so the parse result is remembered for the statement's lifetime.
+  std::string cached_literal;
+  std::vector<float> cached_vector;
   auto resolve_l2 = [&](const Expr& e, L2Spec* out) -> bool {
     if (!is_l2(e)) return true;
     if (e.args.size() != 2) return false;
@@ -695,9 +747,18 @@ Result Database::exec_select(const Stmt& st) {
     if (col.kind != ExprKind::Column) return false;
     const int c = t->find_column(col.name);
     if (c != static_cast<int>(t->vec_col) || dims <= 0) return false;
+    const Expr& lit = *e.args[1];
+    if (!cached_literal.empty() && lit.kind == ExprKind::StrLit && lit.s == cached_literal) {
+      out->q = cached_vector;
+      return static_cast<int64_t>(out->q.size()) == dims;
+    }
     std::vector<float> q;
-    if (!vector_from_expr(*e.args[1], &q)) return false;
+    if (!vector_from_expr(lit, &q)) return false;
     if (static_cast<int64_t>(q.size()) != dims) return false;
+    if (lit.kind == ExprKind::StrLit) {
+      cached_literal = lit.s;
+      cached_vector = q;
+    }
     out->q = std::move(q);
     return true;
   };
@@ -792,12 +853,36 @@ Result Database::exec_select(const Stmt& st) {
     const Pred pred = compile_pred(st.where.get(), *t);
     const bool use_pred = pred.any || (st.where == nullptr);
     const bool no_filter = (st.where == nullptr);
+    const size_t rows = t->cache_rows.size();
+
+    if (k > 0 && use_pred) {
+      // The compiled filter runs inside the scan workers against the columnar arrays, so filtering is
+      // part of the split range instead of a separate serial pass.
+      FastKeep keep;
+      keep.table = t;
+      keep.a = &pred.a;
+      keep.b = &pred.b;
+      keep.use_b = pred.use_b;
+      std::vector<VecHit> hits;
+      l2_topk_parallel(t->cache_vecs.data(), q, static_cast<int64_t>(rows), dims,
+                       static_cast<int64_t>(k), t->cache_pks.data(),
+                       no_filter ? nullptr : &fast_keep_row, no_filter ? nullptr : &keep, &hits);
+      r.rows.reserve(hits.size());
+      for (const VecHit& hit : hits) {
+        const size_t idx = static_cast<size_t>(hit.idx);
+        std::vector<std::string> line;
+        if (!project(t->cache_rows[idx], t->cache_vec(static_cast<int64_t>(idx)), &line)) return r;
+        r.rows.push_back(std::move(line));
+      }
+      return r;
+    }
+
     if (k == 0) {
       // nothing to return
     } else if (no_filter) {
       // Unfiltered: one batched pass over the contiguous cache, then a bounded heap. The reject test is
       // a single float compare against the current worst distance, so most rows never touch the heap.
-      const size_t n = t->cache_rows.size();
+      const size_t n = rows;
       std::vector<float> dists(n);
       l2_batch(t->cache_vecs.data(), q, static_cast<int64_t>(n), dims, dists.data());
       for (size_t i = 0; i < n; ++i) {
@@ -824,10 +909,29 @@ Result Database::exec_select(const Stmt& st) {
         return a.pk < b.pk;
       });
     } else {
+      // The compiled predicate reads the columnar arrays: a filter pass is a sequential walk over one
+      // small array instead of one heap pointer dereference per row.
+      auto flat_holds = [&](const CmpPred& p, const size_t i) -> bool {
+        if (p.lit_is_str) {
+          const std::vector<uint32_t>& off = t->cache_str_off[static_cast<size_t>(p.col)];
+          const std::vector<char>& data = t->cache_str_data[static_cast<size_t>(p.col)];
+          const uint32_t begin = off[i];
+          const size_t len = off[i + 1] - begin;
+          const std::string& lit = p.lit_s;
+          const size_t common = len < lit.size() ? len : lit.size();
+          int cmp = common == 0 ? 0 : std::memcmp(data.data() + begin, lit.data(), common);
+          if (cmp == 0) cmp = (len < lit.size()) ? -1 : (len > lit.size() ? 1 : 0);
+          return cmp_op_holds(p.op, cmp);
+        }
+        const int64_t value = t->cache_int_cols[static_cast<size_t>(p.col)][i];
+        const int cmp = (value < p.lit_i) ? -1 : (value > p.lit_i ? 1 : 0);
+        return cmp_op_holds(p.op, cmp);
+      };
       for (size_t i = 0; i < t->cache_rows.size(); ++i) {
         const Row& row = t->cache_rows[i];
         if (use_pred) {
-          if (!pred_holds(pred, row)) continue;
+          if (!flat_holds(pred.a, i)) continue;
+          if (pred.use_b && !flat_holds(pred.b, i)) continue;
         } else {
           Ctx ctx{t, &row, t->cache_vec(static_cast<int64_t>(i))};
           bool keep = false;
