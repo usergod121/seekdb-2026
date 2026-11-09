@@ -16,6 +16,36 @@ namespace {
 
 volatile std::sig_atomic_t g_stop = 0;
 
+// Trims surrounding whitespace and trailing CR of one input line.
+std::string trim_line(const std::string& in) {
+  size_t begin = 0;
+  size_t end = in.size();
+  while (begin < end && (in[begin] == ' ' || in[begin] == '\t' || in[begin] == '\r' || in[begin] == '\n')) {
+    ++begin;
+  }
+  while (end > begin && (in[end - 1] == ' ' || in[end - 1] == '\t' || in[end - 1] == '\r' ||
+                         in[end - 1] == '\n')) {
+    --end;
+  }
+  return in.substr(begin, end - begin);
+}
+
+// A driver directive that arrived on the SQL channel. Recognising it means the driver always gets an
+// answer instead of waiting for a statement that never produces output.
+enum class Directive { None, Restart, ModeExact, ModeAnn, Shutdown };
+
+Directive classify_directive(const std::string& line) {
+  if (line == "--restart") return Directive::Restart;
+  if (line == "--mode exact") return Directive::ModeExact;
+  if (line == "--mode ann") return Directive::ModeAnn;
+  // Graceful shutdown spellings a driver may send instead of a signal.
+  if (line == "quit" || line == "exit" || line == "\\q" || line == "--quit" || line == "--exit" ||
+      line == "--shutdown") {
+    return Directive::Shutdown;
+  }
+  return Directive::None;
+}
+
 void on_signal(int) { g_stop = 1; }
 
 bool parse_args(int argc, char** argv, std::string* data_dir) {
@@ -71,8 +101,23 @@ int main(int argc, char** argv) {
       eof = true;
       break;
     }
+    const std::string chunk(buf, static_cast<size_t>(n));
+    // A directive usually arrives on its own line while the driver waits for a response.
+    if (splitter.empty()) {
+      const Directive directive = classify_directive(trim_line(chunk));
+      if (directive == Directive::Shutdown) {
+        std::fprintf(stderr, "shutdown command received\n");
+        break;
+      }
+      if (directive != Directive::None) {
+        // --restart is the driver's job (it closes and reopens the data directory); --mode only changes
+        // how results may be produced, and this engine always answers exactly, so both are acknowledged.
+        w.result(mv::Result());
+        continue;
+      }
+    }
     stmts.clear();
-    splitter.feed(std::string(buf, static_cast<size_t>(n)), &stmts);
+    splitter.feed(chunk, &stmts);
     for (const std::string& sql : stmts) {
       if (g_stop != 0) break;
       // A statement consisting only of whitespace/comments produces no output.
