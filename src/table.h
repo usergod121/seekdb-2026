@@ -38,6 +38,19 @@ struct Table {
   bool has_vector_index = false;
   std::string vector_index_name;
 
+  // Bounded in-memory cache of the whole table. When the data fits the budget a scan skips page I/O
+  // and the vector payloads sit in one contiguous array, which is what lets the distance kernel
+  // vectorise. When it does not fit, the paged path is used instead and correctness is unchanged.
+  std::vector<Row> cache_rows;
+  std::vector<int64_t> cache_pks;
+  std::vector<float> cache_vecs;    // flat: row i occupies [i*dim(), (i+1)*dim())
+  bool cache_valid = false;
+  int64_t cache_budget_bytes = 64LL * 1024 * 1024;
+
+  Err build_cache();
+  void invalidate_cache() { cache_valid = false; cache_rows.clear(); cache_pks.clear(); cache_vecs.clear(); }
+  const float* cache_vec(const int64_t idx) const { return cache_vecs.data() + idx * dim(); }
+
   Err open_pages(const std::string& path, int64_t pool_pages);
   Err close_pages();
 

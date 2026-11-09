@@ -22,6 +22,7 @@ add_executable(minivectordb
   src/table.cpp
   src/storage/pager.cpp
   src/storage/heap.cpp
+  src/storage/vec_kernel.cpp
   src/db.cpp
   src/exec.cpp
   src/protocol/splitter.cpp

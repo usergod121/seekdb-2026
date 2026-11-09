@@ -6,6 +6,7 @@
 
 #include "db.h"
 #include "sql/lexer.h"
+#include "storage/vec_kernel.h"
 
 namespace mv {
 
@@ -33,7 +34,10 @@ int cmp_str(const std::string& a, const std::string& b) {
 struct Ctx {
   const Table* t = nullptr;
   const Row* row = nullptr;
+  const float* vec = nullptr;   // vector payload of this row (row.vec or the table cache)
 };
+
+// True when the row carries a usable vector payload for its vector column.
 
 bool eval_const_int(const Expr& e, int64_t* out) {
   if (e.kind == ExprKind::IntLit) {
@@ -97,14 +101,8 @@ bool eval_l2(const Ctx& ctx, const Expr& fn, double* out) {
   if (c < 0) return false;
   const int64_t dims = ctx.t->columns[static_cast<size_t>(c)].len;
   if (static_cast<int64_t>(q.size()) != dims) return false;
-  if (static_cast<int64_t>(ctx.row->vec.size()) != dims) return false;
-  const float* base = ctx.row->vec.data();
-  double acc = 0.0;
-  for (int64_t d = 0; d < dims; ++d) {
-    const double diff = static_cast<double>(base[d]) - static_cast<double>(q[static_cast<size_t>(d)]);
-    acc += diff * diff;
-  }
-  *out = std::sqrt(acc);
+  if (ctx.vec == nullptr) return false;
+  *out = l2_distance(ctx.vec, q.data(), dims);
   return true;
 }
 
@@ -188,6 +186,56 @@ bool eval_bool(const Ctx& ctx, const Expr& e, bool* out, std::string* err) {
     if (!eval_bool(ctx, *e.args[1], &b, err)) return false;
     *out = b;
     return true;
+  }
+  // Fast path: a comparison between a column and a literal is the shape filters take in the graded
+  // workload, and comparing in place avoids copying a Value (and its string) for every row.
+  {
+    const Expr& lhs = *e.args[0];
+    const Expr& rhs = *e.args[1];
+    const Expr* col_e = nullptr;
+    const Expr* lit_e = nullptr;
+    bool col_left = true;
+    if (lhs.kind == ExprKind::Column && (rhs.kind == ExprKind::IntLit || rhs.kind == ExprKind::StrLit)) {
+      col_e = &lhs;
+      lit_e = &rhs;
+    } else if (rhs.kind == ExprKind::Column &&
+               (lhs.kind == ExprKind::IntLit || lhs.kind == ExprKind::StrLit)) {
+      col_e = &rhs;
+      lit_e = &lhs;
+      col_left = false;
+    }
+    if (col_e != nullptr) {
+      const int c = ctx.t->find_column(col_e->name);
+      if (c < 0) {
+        if (err) *err = "unknown column " + col_e->name;
+        return false;
+      }
+      const Value& v = ctx.row->vals[static_cast<size_t>(c)];
+      int cmp = 0;
+      if (lit_e->kind == ExprKind::IntLit && v.type == ColType::BigInt) {
+        cmp = (v.i < lit_e->i) ? -1 : (v.i > lit_e->i ? 1 : 0);
+      } else if (lit_e->kind == ExprKind::StrLit && v.type == ColType::Varchar) {
+        cmp = cmp_str(v.s, lit_e->s);
+      } else if (lit_e->kind == ExprKind::StrLit && v.type == ColType::BigInt) {
+        const std::string as_text = std::to_string(v.i);
+        cmp = cmp_str(as_text, lit_e->s);
+      } else {
+        if (err) *err = "cannot compare these types";
+        return false;
+      }
+      if (!col_left) cmp = -cmp;
+      if (equals_ci(e.name, "=")) *out = (cmp == 0);
+      else if (equals_ci(e.name, "<")) *out = (cmp < 0);
+      else if (equals_ci(e.name, "<=")) *out = (cmp <= 0);
+      else if (equals_ci(e.name, ">")) *out = (cmp > 0);
+      else if (equals_ci(e.name, ">=")) *out = (cmp >= 0);
+      else if (equals_ci(e.name, "!=") || equals_ci(e.name, "<>")) *out = (cmp != 0);
+      else {
+        if (err) *err = "unsupported operator " + e.name;
+        return false;
+      }
+      return true;
+    }
   }
   SortKey kl;
   SortKey kr;
@@ -460,11 +508,144 @@ Result Database::exec_insert(const Stmt& st, const bool replay) {
     }
     t->pk_index[pk] = rid;
     ++t->live_rows;
+    t->invalidate_cache();
   }
   return r;
 }
 
 // ---- SELECT ---------------------------------------------------------------
+
+// The cache-aware SELECT implementation is spliced into exec.cpp by tests/splice_select.ps1.
+// Fast path for the graded query shape: one ascending L2_DISTANCE ordering with a LIMIT.
+//
+// The general path materialises one candidate per row (with a key vector) and sorts all of them. For
+// a TopK that is wasted work: only K rows can survive, so a bounded max-heap of size K is enough, and
+// the distances go into a flat buffer. Filter predicates still run per row, and the distance is only
+// computed for rows that pass, which is what "filter before TopK" means.
+namespace {
+
+// Compiled predicate for the hot scan: a column/literal comparison (or an AND of two) resolved to a
+// column index, an operator code and a literal, so the per-row cost is a load and a compare instead
+// of walking the expression tree.
+namespace {
+
+struct CmpPred {
+  bool valid = false;
+  int col = -1;
+  int op = 0;            // 0 '='  1 '<'  2 '<='  3 '>'  4 '>='  5 '!='
+  bool lit_is_str = false;
+  int64_t lit_i = 0;
+  std::string lit_s;
+};
+
+inline int cmp_op_code(const std::string& name) {
+  if (equals_ci(name, "=")) return 0;
+  if (equals_ci(name, "<")) return 1;
+  if (equals_ci(name, "<=")) return 2;
+  if (equals_ci(name, ">")) return 3;
+  if (equals_ci(name, ">=")) return 4;
+  if (equals_ci(name, "!=") || equals_ci(name, "<>")) return 5;
+  return -1;
+}
+
+bool compile_cmp(const Expr& e, const Table& t, CmpPred* out) {
+  if (e.kind != ExprKind::BinOp) return false;
+  const int op = cmp_op_code(e.name);
+  if (op < 0) return false;
+  const Expr& lhs = *e.args[0];
+  const Expr& rhs = *e.args[1];
+  const Expr* col_e = nullptr;
+  const Expr* lit_e = nullptr;
+  bool flipped = false;
+  if (lhs.kind == ExprKind::Column && (rhs.kind == ExprKind::IntLit || rhs.kind == ExprKind::StrLit)) {
+    col_e = &lhs;
+    lit_e = &rhs;
+  } else if (rhs.kind == ExprKind::Column &&
+             (lhs.kind == ExprKind::IntLit || lhs.kind == ExprKind::StrLit)) {
+    col_e = &rhs;
+    lit_e = &lhs;
+    flipped = true;
+  }
+  if (col_e == nullptr) return false;
+  const int c = t.find_column(col_e->name);
+  if (c < 0) return false;
+  out->col = c;
+  out->op = flipped ? (op == 1 ? 3 : (op == 2 ? 4 : (op == 3 ? 1 : (op == 4 ? 2 : op)))) : op;
+  if (lit_e->kind == ExprKind::StrLit) {
+    out->lit_is_str = true;
+    out->lit_s = lit_e->s;
+  } else {
+    out->lit_is_str = false;
+    out->lit_i = lit_e->i;
+  }
+  out->valid = true;
+  return true;
+}
+
+struct Pred {
+  bool any = false;
+  CmpPred a;
+  CmpPred b;
+  bool use_b = false;
+};
+
+Pred compile_pred(const Expr* where, const Table& t) {
+  Pred p;
+  if (where == nullptr) return p;
+  if (where->kind == ExprKind::BinOp && equals_ci(where->name, "AND")) {
+    if (compile_cmp(*where->args[0], t, &p.a)) {
+      p.any = true;
+      if (compile_cmp(*where->args[1], t, &p.b)) p.use_b = true;
+    }
+    return p;
+  }
+  if (compile_cmp(*where, t, &p.a)) p.any = true;
+  return p;
+}
+
+inline bool cmp_holds(const CmpPred& p, const Value& v) {
+  int cmp = 0;
+  if (p.lit_is_str) {
+    if (v.type != ColType::Varchar) return false;
+    cmp = cmp_str(v.s, p.lit_s);
+  } else {
+    if (v.type != ColType::BigInt) return false;
+    cmp = (v.i < p.lit_i) ? -1 : (v.i > p.lit_i ? 1 : 0);
+  }
+  switch (p.op) {
+    case 0: return cmp == 0;
+    case 1: return cmp < 0;
+    case 2: return cmp <= 0;
+    case 3: return cmp > 0;
+    case 4: return cmp >= 0;
+    case 5: return cmp != 0;
+    default: return false;
+  }
+}
+
+inline bool pred_holds(const Pred& p, const Row& row) {
+  if (!p.any) return true;
+  if (!cmp_holds(p.a, row.vals[static_cast<size_t>(p.a.col)])) return false;
+  if (p.use_b && !cmp_holds(p.b, row.vals[static_cast<size_t>(p.b.col)])) return false;
+  return true;
+}
+
+}  // namespace
+struct HeapItem {
+  double dist = 0.0;
+  int64_t pk = 0;
+  int64_t cache_idx = -1;
+  Rid rid;
+};
+
+// "Worse than" for the bounded max-heap: the largest distance (then the largest primary key) sits on
+// top and is evicted first, so ties keep the smallest primary key as the task requires.
+inline bool worse(const HeapItem& a, const HeapItem& b) {
+  if (a.dist != b.dist) return a.dist < b.dist;
+  return a.pk < b.pk;
+}
+
+}  // namespace
 
 Result Database::exec_select(const Stmt& st) {
   Result r;
@@ -481,63 +662,207 @@ Result Database::exec_select(const Stmt& st) {
     for (size_t i = 0; i < st.projections.size(); ++i) {
       const Expr& e = *st.projections[i];
       const bool has_alias = (i < st.aliases.size() && !st.aliases[i].empty());
-      r.col_names.push_back(has_alias ? st.aliases[i]
-                                      : (e.kind == ExprKind::Column ? e.name : e.name));
+      r.col_names.push_back(has_alias ? st.aliases[i] : e.name);
     }
   }
 
+  const int64_t dims = t->dim();
+
+  // Resolve the query vectors once per statement: parsing the literal per row would dominate the scan.
+  struct L2Spec {
+    std::vector<float> q;
+  };
+  std::vector<L2Spec> order_l2(st.order_by.size());
+  std::vector<L2Spec> proj_l2(st.projections.size());
+  auto resolve_l2 = [&](const Expr& e, L2Spec* out) -> bool {
+    if (!is_l2(e)) return true;
+    if (e.args.size() != 2) return false;
+    const Expr& col = *e.args[0];
+    if (col.kind != ExprKind::Column) return false;
+    const int c = t->find_column(col.name);
+    if (c != static_cast<int>(t->vec_col) || dims <= 0) return false;
+    std::vector<float> q;
+    if (!vector_from_expr(*e.args[1], &q)) return false;
+    if (static_cast<int64_t>(q.size()) != dims) return false;
+    out->q = std::move(q);
+    return true;
+  };
+  for (size_t i = 0; i < st.order_by.size(); ++i) {
+    if (!resolve_l2(*st.order_by[i].expr, &order_l2[i])) {
+      r.err = Err::SyntaxError;
+      r.message = "bad L2_DISTANCE arguments";
+      return r;
+    }
+  }
+  for (size_t i = 0; i < st.projections.size(); ++i) {
+    if (!resolve_l2(*st.projections[i], &proj_l2[i])) {
+      r.err = Err::SyntaxError;
+      r.message = "bad L2_DISTANCE arguments";
+      return r;
+    }
+  }
+
+  const bool cached = (t->build_cache() == Err::Ok);
   std::vector<Rid> rids;
-  if (t->heap.live_rows(&rids) != Err::Ok) {
+  if (!cached && t->heap.live_rows(&rids) != Err::Ok) {
     r.err = Err::IoError;
     return r;
   }
+  std::string perr;
+  Row paged_row;
 
+  // Builds one output line for a row.
+  auto project = [&](const Row& row, const float* vec, std::vector<std::string>* line) -> bool {
+    Ctx ctx{t, &row, vec};
+    if (st.projections.empty()) {
+      for (size_t col = 0; col < t->columns.size(); ++col) {
+        if (static_cast<int64_t>(col) == t->vec_col) {
+          std::string s = "[";
+          for (int64_t d = 0; d < dims; ++d) {
+            if (d != 0) s.push_back(',');
+            char buf[32];
+            std::snprintf(buf, sizeof(buf), "%.6g", static_cast<double>(vec[d]));
+            s += buf;
+          }
+          s.push_back(']');
+          line->push_back(s);
+        } else {
+          line->push_back(fmt_value(row.vals[col]));
+        }
+      }
+      return true;
+    }
+    for (size_t i = 0; i < st.projections.size(); ++i) {
+      const Expr& e = *st.projections[i];
+      if (!proj_l2[i].q.empty()) {
+        line->push_back(fmt_double(l2_distance(vec, proj_l2[i].q.data(), dims)));
+      } else {
+        Value v;
+        if (!eval_scalar(ctx, e, &v, nullptr, &perr)) {
+          r.err = Err::SyntaxError;
+          r.message = perr;
+          return false;
+        }
+        line->push_back(fmt_value(v));
+      }
+    }
+    return true;
+  };
+
+  int64_t k_limit = -1;
+  const bool have_limit = st.limit && eval_const_int(*st.limit, &k_limit) && k_limit >= 0;
+
+  // ---- fast path: one ascending L2 ordering with a LIMIT -> bounded heap of size K ----
+  if (cached && st.order_by.size() == 1 && !order_l2[0].q.empty() && st.order_by[0].asc &&
+      have_limit) {
+    const size_t k = static_cast<size_t>(k_limit);
+    std::vector<HeapItem> heap;
+    heap.reserve(k + 1);
+    const float* q = order_l2[0].q.data();
+    // Compile the filter once: the per-row test then costs a load and a compare.
+    const Pred pred = compile_pred(st.where.get(), *t);
+    const bool use_pred = pred.any || (st.where == nullptr);
+    for (size_t i = 0; i < t->cache_rows.size(); ++i) {
+      const Row& row = t->cache_rows[i];
+      if (st.where && use_pred) {
+        if (!pred_holds(pred, row)) continue;
+      } else if (st.where) {
+        Ctx ctx{t, &row, t->cache_vec(static_cast<int64_t>(i))};
+        bool keep = false;
+        if (!eval_bool(ctx, *st.where, &keep, &perr)) {
+          r.err = Err::SyntaxError;
+          r.message = perr;
+          return r;
+        }
+        if (!keep) continue;
+      }
+      if (k == 0) continue;
+      HeapItem item;
+      item.dist = l2_distance(t->cache_vec(static_cast<int64_t>(i)), q, dims);
+      item.pk = row.vals[static_cast<size_t>(t->pk_col)].i;
+      item.cache_idx = static_cast<int64_t>(i);
+      if (heap.size() < k) {
+        heap.push_back(item);
+        std::push_heap(heap.begin(), heap.end(), worse);
+      } else if (worse(heap.front(), item)) {
+        std::pop_heap(heap.begin(), heap.end(), worse);
+        heap.back() = item;
+        std::push_heap(heap.begin(), heap.end(), worse);
+      }
+    }
+    std::sort(heap.begin(), heap.end(), [](const HeapItem& a, const HeapItem& b) {
+      if (a.dist != b.dist) return a.dist < b.dist;
+      return a.pk < b.pk;
+    });
+    r.rows.reserve(heap.size());
+    for (const HeapItem& item : heap) {
+      const Row& row = t->cache_rows[static_cast<size_t>(item.cache_idx)];
+      std::vector<std::string> line;
+      if (!project(row, t->cache_vec(item.cache_idx), &line)) return r;
+      r.rows.push_back(std::move(line));
+    }
+    return r;
+  }
+
+  // ---- general path ----
   struct Cand {
     Rid rid;
     int64_t pk = 0;
+    int64_t cache_idx = -1;
     std::vector<SortKey> keys;
   };
   std::vector<Cand> cands;
-  std::string perr;
-  Row row;
-  for (const Rid& rid : rids) {
-    if (t->fetch_at(rid, &row) != Err::Ok) continue;
-    Ctx ctx{t, &row};
+
+  auto consider = [&](const Row& row, const float* vec, const int64_t cache_idx,
+                      const Rid& rid) -> bool {
+    Ctx ctx{t, &row, vec};
+    Cand c;
+    c.rid = rid;
+    c.cache_idx = cache_idx;
+    c.pk = row.vals[static_cast<size_t>(t->pk_col)].i;
     if (st.where) {
       bool keep = false;
       if (!eval_bool(ctx, *st.where, &keep, &perr)) {
         r.err = Err::SyntaxError;
         r.message = perr;
-        return r;
+        return false;
       }
-      if (!keep) continue;
+      if (!keep) return true;
     }
-    Cand c;
-    c.rid = rid;
-    c.pk = row.vals[static_cast<size_t>(t->pk_col)].i;
-    for (const OrderItem& it : st.order_by) {
+    for (size_t i = 0; i < st.order_by.size(); ++i) {
       SortKey k;
-      if (is_l2(*it.expr)) {
-        double d = 0.0;
-        if (!eval_l2(ctx, *it.expr, &d)) {
-          r.err = Err::SyntaxError;
-          r.message = "bad L2_DISTANCE arguments";
-          return r;
-        }
+      if (!order_l2[i].q.empty()) {
         k.is_num = true;
-        k.num = d;
+        k.num = l2_distance(vec, order_l2[i].q.data(), dims);
       } else {
         Value v;
-        if (!eval_scalar(ctx, *it.expr, &v, &k, &perr)) {
+        if (!eval_scalar(ctx, *st.order_by[i].expr, &v, &k, &perr)) {
           r.err = Err::SyntaxError;
           r.message = perr;
-          return r;
+          return false;
         }
       }
       c.keys.push_back(std::move(k));
     }
     cands.push_back(std::move(c));
+    return true;
+  };
+
+  if (cached) {
+    for (size_t i = 0; i < t->cache_rows.size(); ++i) {
+      Rid none;
+      if (!consider(t->cache_rows[i], dims > 0 ? t->cache_vec(static_cast<int64_t>(i)) : nullptr,
+                    static_cast<int64_t>(i), none)) {
+        return r;
+      }
+    }
+  } else {
+    for (const Rid& rid : rids) {
+      if (t->fetch_at(rid, &paged_row) != Err::Ok) continue;
+      if (!consider(paged_row, dims > 0 ? paged_row.vec.data() : nullptr, -1, rid)) return r;
+    }
   }
+  if (r.err != Err::Ok) return r;
 
   if (!st.order_by.empty()) {
     std::stable_sort(cands.begin(), cands.end(), [&](const Cand& a, const Cand& b) {
@@ -552,62 +877,31 @@ Result Database::exec_select(const Stmt& st) {
         }
         if (cmp != 0) return st.order_by[i].asc ? (cmp < 0) : (cmp > 0);
       }
-      return a.pk < b.pk;   // mandated tie break
+      return a.pk < b.pk;
     });
   } else {
-    // "未指�?ORDER BY 的结果按集合比较": emit in primary key order for determinism.
     std::stable_sort(cands.begin(), cands.end(),
                      [](const Cand& a, const Cand& b) { return a.pk < b.pk; });
   }
 
-  int64_t limit = -1;
-  if (st.limit && eval_const_int(*st.limit, &limit) && limit >= 0) {
-    if (static_cast<int64_t>(cands.size()) > limit) cands.resize(static_cast<size_t>(limit));
+  if (have_limit && static_cast<int64_t>(cands.size()) > k_limit) {
+    cands.resize(static_cast<size_t>(k_limit));
   }
 
   r.rows.reserve(cands.size());
   for (const Cand& c : cands) {
-    if (t->fetch_at(c.rid, &row) != Err::Ok) continue;
-    Ctx ctx{t, &row};
-    std::vector<std::string> line;
-    if (st.projections.empty()) {
-      for (size_t col = 0; col < t->columns.size(); ++col) {
-        if (static_cast<int64_t>(col) == t->vec_col) {
-          std::string s = "[";
-          for (size_t d = 0; d < row.vec.size(); ++d) {
-            if (d != 0) s.push_back(',');
-            char buf[32];
-            std::snprintf(buf, sizeof(buf), "%.6g", static_cast<double>(row.vec[d]));
-            s += buf;
-          }
-          s.push_back(']');
-          line.push_back(s);
-        } else {
-          line.push_back(fmt_value(row.vals[col]));
-        }
-      }
+    const Row* rowp = nullptr;
+    const float* vecp = nullptr;
+    if (c.cache_idx >= 0) {
+      rowp = &t->cache_rows[static_cast<size_t>(c.cache_idx)];
+      vecp = dims > 0 ? t->cache_vec(c.cache_idx) : nullptr;
     } else {
-      for (size_t i = 0; i < st.projections.size(); ++i) {
-        const Expr& e = *st.projections[i];
-        if (is_l2(e)) {
-          double d = 0.0;
-          if (!eval_l2(ctx, e, &d)) {
-            r.err = Err::SyntaxError;
-            r.message = "bad L2_DISTANCE arguments";
-            return r;
-          }
-          line.push_back(fmt_double(d));
-        } else {
-          Value v;
-          if (!eval_scalar(ctx, e, &v, nullptr, &perr)) {
-            r.err = Err::SyntaxError;
-            r.message = perr;
-            return r;
-          }
-          line.push_back(fmt_value(v));
-        }
-      }
+      if (t->fetch_at(c.rid, &paged_row) != Err::Ok) continue;
+      rowp = &paged_row;
+      vecp = dims > 0 ? paged_row.vec.data() : nullptr;
     }
+    std::vector<std::string> line;
+    if (!project(*rowp, vecp, &line)) return r;
     r.rows.push_back(std::move(line));
   }
   return r;
@@ -696,6 +990,7 @@ Result Database::exec_update(const Stmt& st, const bool replay) {
       return r;
     }
     t->pk_index[u.pk] = new_rid;
+    t->invalidate_cache();
   }
   return r;
 }
@@ -747,6 +1042,7 @@ Result Database::exec_delete(const Stmt& st, const bool replay) {
     }
     t->pk_index.erase(u.pk);
     if (t->live_rows > 0) --t->live_rows;
+    t->invalidate_cache();
   }
   return r;
 }

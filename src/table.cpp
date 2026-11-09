@@ -161,3 +161,39 @@ Err Table::rebuild_pk_index() {
 }
 
 }  // namespace mv
+
+namespace mv {
+
+// Builds the bounded in-memory cache: decoded rows plus one contiguous float array for the vector
+// column. Returns Err::ValueOverflow (cache left invalid) when the data does not fit the budget, in
+// which case callers fall back to the paged path.
+Err Table::build_cache() {
+  if (cache_valid) return Err::Ok;
+  std::vector<Rid> rids;
+  if (heap.live_rows(&rids) != Err::Ok) return Err::IoError;
+  const int64_t dims = dim();
+  const int64_t per_row = 64 + dims * static_cast<int64_t>(sizeof(float));
+  if (static_cast<int64_t>(rids.size()) * per_row > cache_budget_bytes) return Err::ValueOverflow;
+
+  cache_rows.clear();
+  cache_pks.clear();
+  cache_vecs.clear();
+  cache_rows.reserve(rids.size());
+  cache_pks.reserve(rids.size());
+  if (dims > 0) cache_vecs.reserve(rids.size() * dims);
+  Row row;
+  for (const Rid& rid : rids) {
+    if (fetch_at(rid, &row) != Err::Ok) continue;
+    cache_pks.push_back(row.vals[static_cast<size_t>(pk_col)].i);
+    if (dims > 0) {
+      if (static_cast<int64_t>(row.vec.size()) != dims) return Err::VectorDimMismatch;
+      cache_vecs.insert(cache_vecs.end(), row.vec.begin(), row.vec.end());
+      row.vec.clear();   // the payload lives in cache_vecs; Row::vec is not used on the cached path
+    }
+    cache_rows.push_back(row);
+  }
+  cache_valid = true;
+  return Err::Ok;
+}
+
+}  // namespace mv
