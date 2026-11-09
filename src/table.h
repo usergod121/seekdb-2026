@@ -1,9 +1,9 @@
-// One table: schema, row storage, primary key index and the vector arena.
+// One table: schema, rows in a private paged heap, primary key index and the row codec.
 //
-// Rows are kept in a vector with a tombstone flag; the vector payload is stored out of line in a
-// shared float arena so a scan reads contiguous memory (this is what the TopK kernel walks). The
-// primary key index maps pk -> row slot, so a point lookup is one probe and duplicate keys are
-// detected in O(1).
+// Each table owns its own page file (data/t_<name>.pages) so its heap owns a contiguous page range
+// and the buffer pool budget is per table. Rows live on disk pages; only the primary key index
+// (pk -> (page, slot)) and one decoded row at a time are resident, so a table larger than the memory
+// budget still works.
 #pragma once
 
 #include <cstdint>
@@ -12,39 +12,46 @@
 #include <vector>
 
 #include "common.h"
+#include "storage/heap.h"
+#include "storage/pager.h"
 
 namespace mv {
+
+// A decoded row: the column values plus the vector payload of the vector column (if any).
+struct Row {
+  std::vector<Value> vals;
+  std::vector<float> vec;
+};
 
 struct Table {
   std::string name;
   std::vector<Column> columns;
   int64_t pk_col = -1;
-  int64_t vec_col = -1;      // -1 when the table has no VECTOR column
+  int64_t vec_col = -1;
 
-  // row storage
-  std::vector<std::vector<Value>> rows;   // slot -> values (Value::vec_off points into arena)
-  std::vector<uint8_t> alive;             // 1 = visible, 0 = deleted (tombstone)
-  std::unordered_map<int64_t, int64_t, KeyHash> pk_index;   // pk -> slot
-  std::vector<float> arena;               // float payload for all vectors
-  int64_t arena_used = 0;                 // floats in use (arena.size() may be larger)
+  Pager pager;
+  Heap heap;
+  int64_t live_rows = 0;
 
-  // vector index (CREATE VECTOR INDEX): the task only requires that results stay correct after
-  // inserts/updates/deletes, so the index is a monotonically bumped version plus a dense list of live
-  // vector slots for scans. Exact search uses the arena directly; the structure exists so the DDL and
-  // its maintenance semantics are real.
+  std::unordered_map<int64_t, Rid, KeyHash> pk_index;
+
   bool has_vector_index = false;
   std::string vector_index_name;
-  uint64_t index_version = 0;
-  std::vector<int64_t> index_slots;
+
+  Err open_pages(const std::string& path, int64_t pool_pages);
+  Err close_pages();
 
   int find_column(const std::string& name) const;
   int64_t dim() const { return (vec_col >= 0) ? columns[vec_col].len : 0; }
 
-  // Allocates `n` floats in the arena and returns the offset (caller writes them).
-  int64_t alloc_vector(int64_t n);
-  void free_vector(int64_t off, int64_t n);
+  // Row codec: for each column one type byte followed by its payload.
+  Err encode_row(const Row& row, std::string* out) const;
+  Err decode_row(const char* data, int32_t len, Row* out) const;
 
-  void rebuild_index_slots();
+  Err fetch_at(const Rid& rid, Row* out);
+  Err fetch(const int64_t pk, Row* out);
+  // Rebuilds the primary key index from the heap (startup / recovery).
+  Err rebuild_pk_index();
 };
 
 }  // namespace mv

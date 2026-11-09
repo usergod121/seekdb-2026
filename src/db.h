@@ -1,49 +1,49 @@
 // The database: catalog, statement execution, transactions and durability.
 //
-// Durability model (snapshot + logical WAL):
-//   * every statement that commits is appended to the WAL as its own SQL text, followed by a commit
-//     marker; the WAL is fsynced before the commit is acknowledged;
+// Durability model (page files + logical WAL):
+//   * rows live in per-table paged files behind bounded buffer pools, so a table larger than the
+//     memory budget still works;
+//   * every committed statement is appended to the WAL as its own SQL text followed by a commit
+//     marker, and the WAL is fsynced before the commit is acknowledged;
 //   * an explicit transaction buffers its statements and writes them with one commit marker at
 //     COMMIT, so a crash before that leaves nothing to replay;
-//   * a checkpoint writes the whole state to a snapshot file (temp + atomic rename) and truncates the
-//     WAL, so recovery is "load snapshot, replay committed WAL records";
-//   * replay applies statements idempotently (insert-if-absent, update-upsert, delete-if-present, DDL
-//     if-absent), which makes replaying the same WAL twice safe.
+//   * a checkpoint flushes every page file, rewrites the catalog page and truncates the WAL, so
+//     recovery is "open the page files, rebuild the primary key indexes, replay committed records".
 #pragma once
 
-#include <map>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 #include "common.h"
 #include "sql/ast.h"
+#include "storage/pager.h"
 #include "table.h"
 
 namespace mv {
 
 struct Result {
   Err err = Err::Ok;
-  std::string message;                            // error detail (stderr / diagnostics only)
+  std::string message;
   std::vector<std::string> col_names;
-  std::vector<std::vector<std::string>> rows;     // already formatted text
-  bool is_query = false;                          // SELECT-ish: rows are meaningful
+  std::vector<std::vector<std::string>> rows;
+  bool is_query = false;
 };
 
 class Database {
  public:
   Database() = default;
+  ~Database();
 
-  // Opens (or creates) the data directory, loads the snapshot and replays the WAL. Must complete
-  // before the caller reports "ready".
   Err open(const std::string& data_dir);
-  // Clean shutdown: rolls back an open transaction, checkpoints and closes the WAL.
   Err close();
-
   Result execute(const std::string& sql);
 
+  // Path of a table's page file; `exec` needs it when a table is created.
+  std::string table_pages_path(const std::string& table) const;
+  int64_t pool_pages() const { return pool_pages_; }
+
  private:
-  // --- execution ---
   Result exec(const Stmt& st, bool replay);
   Table* find_table(const std::string& name);
   Result exec_create_table(const Stmt& st, bool replay);
@@ -53,50 +53,46 @@ class Database {
   Result exec_update(const Stmt& st, bool replay);
   Result exec_delete(const Stmt& st, bool replay);
 
-  // --- durability ---
+  Err load_catalog();
+  Err save_catalog();
+
   Err wal_append(const std::string& sql);
   Err wal_commit();
   Err wal_sync();
   Err checkpoint();
-  Err load_snapshot();
-  Err save_snapshot();
   Err replay_wal();
 
-  // --- transactions ---
   struct UndoRow {
-    std::string table;   // lower-cased
+    std::string table;
     int64_t pk = 0;
     bool existed = false;
-    std::vector<Value> old_row;
-    std::vector<float> old_vec;   // payload of the old vector column, when present
+    Rid rid;                   // where the old row was, when it existed
+    std::string old_payload;   // encoded old row
   };
   struct UndoDdl {
     std::string table;
     bool created_table = false;
     bool created_index = false;
   };
-  void undo_clear();
-  Err undo_apply();
-  // Rolls back only the effects recorded after the given marks. A failing statement uses this so that
-  // previously successful statements of the same transaction survive.
   Err undo_apply_from(size_t row_mark, size_t ddl_mark);
-  void capture_undo_insert(const std::string& table, const int64_t pk);
+  void undo_clear();
 
   std::string data_dir_;
-  std::string snapshot_path_;
+  std::string catalog_path_;
   std::string wal_path_;
+  Pager catalog_pager_;
   int wal_fd_ = -1;
+  int64_t pool_pages_ = 512;   // 512 * 8 KiB = 4 MiB per page file
 
-  std::unordered_map<std::string, Table> tables_;   // key: lower-cased table name
+  std::unordered_map<std::string, Table> tables_;
 
   bool in_txn_ = false;
   std::vector<UndoRow> undo_rows_;
   std::vector<UndoDdl> undo_ddl_;
-  std::vector<std::string> txn_log_;                // statements logged for the open transaction
+  std::vector<std::string> txn_log_;
   bool dirty_ = false;
 };
 
-// Lower-cases ASCII for case-insensitive identifier lookup; UTF-8 bytes are preserved.
 std::string lower_ascii(const std::string& s);
 
 }  // namespace mv

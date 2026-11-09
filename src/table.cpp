@@ -1,8 +1,47 @@
 #include "table.h"
 
+#include <cstring>
+
 #include "sql/lexer.h"
 
 namespace mv {
+
+namespace {
+
+void put_u32(std::string* out, const uint32_t v) {
+  out->append(reinterpret_cast<const char*>(&v), 4);
+}
+
+struct Cursor {
+  const char* p = nullptr;
+  int32_t n = 0;
+  bool ok = true;
+  bool need(const int32_t k) {
+    if (!ok || n < k) {
+      ok = false;
+      return false;
+    }
+    return true;
+  }
+  uint32_t u32() {
+    uint32_t v = 0;
+    if (!need(4)) return 0;
+    std::memcpy(&v, p, 4);
+    p += 4;
+    n -= 4;
+    return v;
+  }
+  int64_t i64() {
+    int64_t v = 0;
+    if (!need(8)) return 0;
+    std::memcpy(&v, p, 8);
+    p += 8;
+    n -= 8;
+    return v;
+  }
+};
+
+}  // namespace
 
 int Table::find_column(const std::string& name) const {
   for (size_t i = 0; i < columns.size(); ++i) {
@@ -11,31 +50,114 @@ int Table::find_column(const std::string& name) const {
   return -1;
 }
 
-int64_t Table::alloc_vector(const int64_t n) {
-  const int64_t off = arena_used;
-  arena_used += n;
-  if (static_cast<int64_t>(arena.size()) < arena_used) arena.resize(static_cast<size_t>(arena_used));
-  return off;
+Err Table::open_pages(const std::string& path, const int64_t pool_pages) {
+  if (pager.open(path, pool_pages) != Err::Ok) return Err::IoError;
+  return heap.open(&pager, 0);
 }
 
-void Table::free_vector(const int64_t off, const int64_t n) {
-  (void)off;
-  (void)n;
-  // The arena is append only: a freed vector stays as dead space until the table is rewritten. This
-  // keeps updates allocation-free in the common path and is fine for the workloads here; a table
-  // rewrite (compaction) reclaims it.
+Err Table::close_pages() {
+  (void)heap.close();
+  return pager.close();
 }
 
-void Table::rebuild_index_slots() {
-  index_slots.clear();
-  if (!has_vector_index) return;
-  index_slots.reserve(rows.size());
-  for (size_t slot = 0; slot < rows.size(); ++slot) {
-    if (alive[slot] != 0 && vec_col >= 0 && rows[slot][vec_col].vec_off >= 0) {
-      index_slots.push_back(static_cast<int64_t>(slot));
+Err Table::encode_row(const Row& row, std::string* out) const {
+  out->clear();
+  out->reserve(32 + row.vec.size() * sizeof(float));
+  for (size_t c = 0; c < columns.size(); ++c) {
+    const Column& col = columns[c];
+    out->push_back(static_cast<char>(col.type));
+    const Value& v = row.vals[c];
+    switch (col.type) {
+      case ColType::BigInt:
+        out->append(reinterpret_cast<const char*>(&v.i), 8);
+        break;
+      case ColType::Varchar:
+        put_u32(out, static_cast<uint32_t>(v.s.size()));
+        out->append(v.s);
+        break;
+      case ColType::Vector: {
+        const int64_t dims = col.len;
+        if (static_cast<int64_t>(row.vec.size()) != dims) return Err::VectorDimMismatch;
+        put_u32(out, static_cast<uint32_t>(dims));
+        out->append(reinterpret_cast<const char*>(row.vec.data()),
+                    static_cast<size_t>(dims) * sizeof(float));
+        break;
+      }
     }
   }
-  ++index_version;
+  return Err::Ok;
+}
+
+Err Table::decode_row(const char* data, const int32_t len, Row* out) const {
+  Cursor cur{data, len, true};
+  out->vals.assign(columns.size(), Value());
+  out->vec.clear();
+  for (size_t c = 0; c < columns.size(); ++c) {
+    const Column& col = columns[c];
+    if (!cur.need(1)) return Err::IoError;
+    const auto stored_type = static_cast<ColType>(*cur.p);
+    cur.p += 1;
+    cur.n -= 1;
+    if (stored_type != col.type) return Err::IoError;   // schema mismatch: refuse to guess
+    Value& v = out->vals[c];
+    v.type = col.type;
+    switch (col.type) {
+      case ColType::BigInt:
+        v.i = cur.i64();
+        break;
+      case ColType::Varchar: {
+        const uint32_t slen = cur.u32();
+        if (!cur.need(static_cast<int32_t>(slen))) return Err::IoError;
+        v.s.assign(cur.p, slen);
+        cur.p += slen;
+        cur.n -= static_cast<int32_t>(slen);
+        break;
+      }
+      case ColType::Vector: {
+        const uint32_t dims = cur.u32();
+        if (static_cast<int64_t>(dims) != col.len) return Err::VectorDimMismatch;
+        const int32_t bytes = static_cast<int32_t>(dims * sizeof(float));
+        if (!cur.need(bytes)) return Err::IoError;
+        out->vec.resize(dims);
+        std::memcpy(out->vec.data(), cur.p, static_cast<size_t>(bytes));
+        cur.p += bytes;
+        cur.n -= bytes;
+        v.vec_off = 0;   // the payload lives in Row::vec
+        break;
+      }
+    }
+  }
+  return Err::Ok;
+}
+
+Err Table::fetch_at(const Rid& rid, Row* out) {
+  const char* data = nullptr;
+  int32_t len = 0;
+  if (heap.read_view(rid, &data, &len) != Err::Ok) return Err::IoError;
+  if (len == 0) return Err::TableNotFound;
+  // read_view borrows a page from the buffer pool: copy out before any further heap call.
+  std::string buf(data, static_cast<size_t>(len));
+  return decode_row(buf.data(), len, out);
+}
+
+Err Table::fetch(const int64_t pk, Row* out) {
+  const auto it = pk_index.find(pk);
+  if (it == pk_index.end()) return Err::TableNotFound;
+  return fetch_at(it->second, out);
+}
+
+Err Table::rebuild_pk_index() {
+  std::vector<Rid> rids;
+  if (heap.live_rows(&rids) != Err::Ok) return Err::IoError;
+  pk_index.clear();
+  pk_index.reserve(rids.size());
+  Row row;
+  for (const Rid& rid : rids) {
+    if (fetch_at(rid, &row) != Err::Ok) continue;
+    pk_index[row.vals[static_cast<size_t>(pk_col)].i] = rid;
+  }
+  live_rows = static_cast<int64_t>(rids.size());
+  return Err::Ok;
 }
 
 }  // namespace mv

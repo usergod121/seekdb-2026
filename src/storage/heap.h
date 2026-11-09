@@ -36,6 +36,9 @@ class Heap {
 
   // Live row addresses, in page/slot order.
   Err live_rows(std::vector<Rid>* out);
+  // Re-points the heap at its pager: a Table holding a Heap is moved into the catalog map once, and
+  // the heap must follow the pager to its final address.
+  void rebind(Pager* pager) { pager_ = pager; }
   // The first page that is free for a new heap (for catalog bookkeeping).
   int32_t hwm_page() const { return hwm_page_; }
 

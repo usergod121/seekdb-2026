@@ -1,6 +1,7 @@
-// Statement execution: DDL, INSERT, SELECT (including L2 TopK), UPDATE and DELETE.
+// Statement execution: DDL, INSERT, SELECT (including vector TopK), UPDATE and DELETE.
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 
 #include "db.h"
@@ -10,7 +11,7 @@ namespace mv {
 
 namespace {
 
-// Unicode code point count for VARCHAR(n) length semantics.
+// Unicode code point count: VARCHAR(n) length semantics.
 int64_t utf8_length(const std::string& s) {
   int64_t n = 0;
   for (unsigned char c : s) {
@@ -19,8 +20,8 @@ int64_t utf8_length(const std::string& s) {
   return n;
 }
 
-// UTF-8 byte order equals Unicode code point order, so a byte compare implements the required
-// ordering without any locale involvement.
+// UTF-8 byte order equals Unicode code point order, so a byte compare implements the required order
+// without any locale involvement.
 int cmp_str(const std::string& a, const std::string& b) {
   const size_t n = std::min(a.size(), b.size());
   const int c = std::memcmp(a.data(), b.data(), n);
@@ -30,8 +31,8 @@ int cmp_str(const std::string& a, const std::string& b) {
 }
 
 struct Ctx {
-  Table* t = nullptr;
-  const std::vector<Value>* row = nullptr;
+  const Table* t = nullptr;
+  const Row* row = nullptr;
 };
 
 bool eval_const_int(const Expr& e, int64_t* out) {
@@ -46,8 +47,8 @@ bool eval_const_int(const Expr& e, int64_t* out) {
   return false;
 }
 
-// Parses a vector from either a bare list [1,2,3] or its quoted form '[1,2,3]'. The task package fixes
-// the exact spelling, so both are accepted to stay compatible either way.
+// Parses a vector from a bare list [1,2,3] or its quoted form '[1,2,3]' - the task package fixes the
+// spelling, so both are accepted.
 bool vector_from_expr(const Expr& e, std::vector<float>* out) {
   if (e.kind == ExprKind::VectorLit) {
     *out = e.vec;
@@ -80,23 +81,24 @@ bool vector_from_expr(const Expr& e, std::vector<float>* out) {
       return false;
     }
   }
-  return i + 1 == toks.size();  // only the terminating End token may follow
+  return i + 1 == toks.size();   // only the terminating End token may follow
 }
 
-// L2 distance between the stored vector of `row` and the query vector.
-bool eval_l2(const Table& t, const std::vector<Value>& row, const Expr& fn, double* out) {
+bool is_l2(const Expr& e) { return e.kind == ExprKind::Func && equals_ci(e.name, "L2_DISTANCE"); }
+
+// L2 distance between the stored vector of the row and the query vector.
+bool eval_l2(const Ctx& ctx, const Expr& fn, double* out) {
   if (fn.args.size() != 2) return false;
   const Expr& col = *fn.args[0];
   if (col.kind != ExprKind::Column) return false;
   std::vector<float> q;
   if (!vector_from_expr(*fn.args[1], &q)) return false;
-  const int c = t.find_column(col.name);
+  const int c = ctx.t->find_column(col.name);
   if (c < 0) return false;
-  const Value& v = row[static_cast<size_t>(c)];
-  if (v.vec_off < 0) return false;
-  const int64_t dims = t.columns[static_cast<size_t>(c)].len;
+  const int64_t dims = ctx.t->columns[static_cast<size_t>(c)].len;
   if (static_cast<int64_t>(q.size()) != dims) return false;
-  const float* base = t.arena.data() + v.vec_off;
+  if (static_cast<int64_t>(ctx.row->vec.size()) != dims) return false;
+  const float* base = ctx.row->vec.data();
   double acc = 0.0;
   for (int64_t d = 0; d < dims; ++d) {
     const double diff = static_cast<double>(base[d]) - static_cast<double>(q[static_cast<size_t>(d)]);
@@ -106,49 +108,36 @@ bool eval_l2(const Table& t, const std::vector<Value>& row, const Expr& fn, doub
   return true;
 }
 
-// A sort key: numeric or textual, plus the row's primary key for the mandated tie break.
 struct SortKey {
   bool is_num = true;
   double num = 0.0;
   std::string str;
 };
 
-bool eval_scalar(const Ctx& ctx, const Expr& e, Value* out, SortKey* key, std::string* err);
-
-bool eval_l2_expr(const Ctx& ctx, const Expr& e, double* out) {
-  if (equals_ci(e.name, "L2_DISTANCE")) {
-    return eval_l2(*ctx.t, *ctx.row, e, out);
-  }
-  return false;
-}
-
 bool eval_scalar(const Ctx& ctx, const Expr& e, Value* out, SortKey* key, std::string* err) {
   switch (e.kind) {
-    case ExprKind::IntLit: {
+    case ExprKind::IntLit:
       out->type = ColType::BigInt;
       out->i = e.i;
       if (key) { key->is_num = true; key->num = static_cast<double>(e.i); }
       return true;
-    }
-    case ExprKind::FloatLit: {
-      out->type = ColType::BigInt;  // floats only appear as distances / literals
+    case ExprKind::FloatLit:
+      out->type = ColType::BigInt;
       out->i = static_cast<int64_t>(e.f);
       if (key) { key->is_num = true; key->num = e.f; }
       return true;
-    }
-    case ExprKind::StrLit: {
+    case ExprKind::StrLit:
       out->type = ColType::Varchar;
       out->s = e.s;
       if (key) { key->is_num = false; key->str = e.s; }
       return true;
-    }
     case ExprKind::Column: {
       const int c = ctx.t->find_column(e.name);
       if (c < 0) {
         if (err) *err = "unknown column " + e.name;
         return false;
       }
-      *out = (*ctx.row)[static_cast<size_t>(c)];
+      *out = ctx.row->vals[static_cast<size_t>(c)];
       if (key) {
         if (out->type == ColType::Varchar) {
           key->is_num = false;
@@ -165,7 +154,7 @@ bool eval_scalar(const Ctx& ctx, const Expr& e, Value* out, SortKey* key, std::s
     }
     case ExprKind::Func: {
       double d = 0.0;
-      if (eval_l2_expr(ctx, e, &d)) {
+      if (is_l2(e) && eval_l2(ctx, e, &d)) {
         out->type = ColType::BigInt;
         out->i = static_cast<int64_t>(d);
         if (key) { key->is_num = true; key->num = d; }
@@ -174,10 +163,9 @@ bool eval_scalar(const Ctx& ctx, const Expr& e, Value* out, SortKey* key, std::s
       if (err) *err = "unsupported function " + e.name;
       return false;
     }
-    case ExprKind::VectorLit: {
+    case ExprKind::VectorLit:
       if (err) *err = "vector literal is only valid in L2_DISTANCE / INSERT";
       return false;
-    }
     case ExprKind::BinOp:
       break;
   }
@@ -185,68 +173,53 @@ bool eval_scalar(const Ctx& ctx, const Expr& e, Value* out, SortKey* key, std::s
   return false;
 }
 
-// Distance for the current row if the expression is L2_DISTANCE, else false.
-bool eval_distance(const Ctx& ctx, const Expr& e, double* out) {
-  if (e.kind == ExprKind::Func) return eval_l2_expr(ctx, e, out);
-  if (e.kind == ExprKind::Column) {
-    // ORDER BY <alias>: the alias of a distance projection resolves to the same expression.
-    return false;
-  }
-  return false;
-}
-
-bool value_truthy(const Value& v) { return v.i != 0; }
-
 bool eval_bool(const Ctx& ctx, const Expr& e, bool* out, std::string* err) {
-  if (e.kind == ExprKind::BinOp) {
-    if (equals_ci(e.name, "AND")) {
-      bool a = false, b = false;
-      if (!eval_bool(ctx, *e.args[0], &a, err)) return false;
-      if (!a) { *out = false; return true; }
-      if (!eval_bool(ctx, *e.args[1], &b, err)) return false;
-      *out = b;
-      return true;
-    }
-    Value l, r;
-    SortKey kl, kr;
-    if (!eval_scalar(ctx, *e.args[0], &l, &kl, err)) {
-      // allow a bare distance on either side
-      double d = 0.0;
-      if (!eval_distance(ctx, *e.args[0], &d)) return false;
-      l.type = ColType::BigInt; l.i = static_cast<int64_t>(d);
-      kl.is_num = true; kl.num = d;
-    }
-    if (!eval_scalar(ctx, *e.args[1], &r, &kr, err)) return false;
-    int cmp = 0;
-    if (kl.is_num && kr.is_num) {
-      cmp = (kl.num < kr.num) ? -1 : (kl.num > kr.num ? 1 : 0);
-    } else if (!kl.is_num && !kr.is_num) {
-      cmp = cmp_str(kl.str, kr.str);
-    } else {
-      if (err) *err = "cannot compare a number with a string";
-      return false;
-    }
-    if (equals_ci(e.name, "=")) *out = (cmp == 0);
-    else if (equals_ci(e.name, "<")) *out = (cmp < 0);
-    else if (equals_ci(e.name, "<=")) *out = (cmp <= 0);
-    else if (equals_ci(e.name, ">")) *out = (cmp > 0);
-    else if (equals_ci(e.name, ">=")) *out = (cmp >= 0);
-    else if (equals_ci(e.name, "!=") || equals_ci(e.name, "<>")) *out = (cmp != 0);
-    else {
-      if (err) *err = "unsupported operator " + e.name;
-      return false;
-    }
+  if (e.kind != ExprKind::BinOp) {
+    Value v;
+    if (!eval_scalar(ctx, e, &v, nullptr, err)) return false;
+    *out = (v.i != 0);
     return true;
   }
-  Value v;
-  if (!eval_scalar(ctx, e, &v, nullptr, err)) return false;
-  *out = value_truthy(v);
+  if (equals_ci(e.name, "AND")) {
+    bool a = false;
+    bool b = false;
+    if (!eval_bool(ctx, *e.args[0], &a, err)) return false;
+    if (!a) { *out = false; return true; }
+    if (!eval_bool(ctx, *e.args[1], &b, err)) return false;
+    *out = b;
+    return true;
+  }
+  SortKey kl;
+  SortKey kr;
+  Value l;
+  Value r;
+  if (!eval_scalar(ctx, *e.args[0], &l, &kl, err)) return false;
+  if (!eval_scalar(ctx, *e.args[1], &r, &kr, err)) return false;
+  int cmp = 0;
+  if (kl.is_num && kr.is_num) {
+    cmp = (kl.num < kr.num) ? -1 : (kl.num > kr.num ? 1 : 0);
+  } else if (!kl.is_num && !kr.is_num) {
+    cmp = cmp_str(kl.str, kr.str);
+  } else {
+    if (err) *err = "cannot compare a number with a string";
+    return false;
+  }
+  if (equals_ci(e.name, "=")) *out = (cmp == 0);
+  else if (equals_ci(e.name, "<")) *out = (cmp < 0);
+  else if (equals_ci(e.name, "<=")) *out = (cmp <= 0);
+  else if (equals_ci(e.name, ">")) *out = (cmp > 0);
+  else if (equals_ci(e.name, ">=")) *out = (cmp >= 0);
+  else if (equals_ci(e.name, "!=") || equals_ci(e.name, "<>")) *out = (cmp != 0);
+  else {
+    if (err) *err = "unsupported operator " + e.name;
+    return false;
+  }
   return true;
 }
 
-// Converts a literal expression to a stored value for the given column.
-Err value_from_expr(const Expr& e, const Column& col, const int64_t dims_hint, std::vector<float>* vec_out,
-                    Value* out) {
+// Converts a literal expression into the stored form for one column. Vector payloads come back in
+// `vec_out` (empty for non vector columns).
+Err value_from_expr(const Expr& e, const Column& col, std::vector<float>* vec_out, Value* out) {
   switch (col.type) {
     case ColType::BigInt: {
       if (e.kind == ExprKind::IntLit) {
@@ -254,11 +227,7 @@ Err value_from_expr(const Expr& e, const Column& col, const int64_t dims_hint, s
         out->i = e.i;
         return Err::Ok;
       }
-      if (e.kind == ExprKind::FloatLit) {
-        return Err::SyntaxError;
-      }
       if (e.kind == ExprKind::StrLit) {
-        // a quoted integer is accepted only when it is exactly an integer
         char* endp = nullptr;
         const long long v = std::strtoll(e.s.c_str(), &endp, 10);
         if (endp == nullptr || *endp != '\0') return Err::SyntaxError;
@@ -284,61 +253,38 @@ Err value_from_expr(const Expr& e, const Column& col, const int64_t dims_hint, s
       return Err::SyntaxError;
     }
     case ColType::Vector: {
-      // Accept both a bare list [1,2,3] and the quoted form '[1,2,3]': the task package fixes the
-      // exact spelling, so both are honoured to stay compatible either way.
       std::vector<float> parsed;
-      if (e.kind == ExprKind::VectorLit) {
-        parsed = e.vec;
-      } else if (e.kind == ExprKind::StrLit) {
-        std::vector<Token> toks;
-        std::string lerr;
-        if (!tokenize(e.s, &toks, &lerr)) return Err::SyntaxError;
-        size_t i = 0;
-        if (i >= toks.size() || toks[i].kind != Tok::Punct || toks[i].text != "[") return Err::SyntaxError;
-        ++i;
-        if (i < toks.size() && toks[i].kind == Tok::Punct && toks[i].text == "]") {
-          ++i;
-        } else {
-          for (;;) {
-            if (i >= toks.size()) return Err::SyntaxError;
-            double v = 0.0;
-            if (toks[i].kind == Tok::Integer) {
-              v = static_cast<double>(toks[i].i);
-            } else if (toks[i].kind == Tok::Float) {
-              v = toks[i].f;
-            } else {
-              return Err::SyntaxError;
-            }
-            parsed.push_back(static_cast<float>(v));
-            ++i;
-            if (i < toks.size() && toks[i].kind == Tok::Punct && toks[i].text == ",") { ++i; continue; }
-            if (i < toks.size() && toks[i].kind == Tok::Punct && toks[i].text == "]") { ++i; break; }
-            return Err::SyntaxError;
-          }
-        }
-        if (i + 1 != toks.size()) return Err::SyntaxError;  // only the terminating End token may follow
-      } else {
-        return Err::SyntaxError;
-      }
+      if (!vector_from_expr(e, &parsed)) return Err::SyntaxError;
       if (static_cast<int64_t>(parsed.size()) != col.len) return Err::VectorDimMismatch;
       for (float f : parsed) {
         if (!std::isfinite(f)) return Err::ValueOverflow;
       }
       out->type = ColType::Vector;
-      out->vec_off = -1;
-      vec_out->assign(parsed.begin(), parsed.end());
-      (void)dims_hint;
+      out->vec_off = 0;
+      *vec_out = std::move(parsed);
       return Err::Ok;
     }
   }
   return Err::NotSupported;
 }
 
-bool is_numeric_distance(const Expr& e) { return e.kind == ExprKind::Func && equals_ci(e.name, "L2_DISTANCE"); }
+std::string fmt_double(const double v) {
+  char buf[64];
+  std::snprintf(buf, sizeof(buf), "%.6f", v);
+  std::string s(buf);
+  while (s.size() > 1 && s.back() == '0') s.pop_back();
+  if (!s.empty() && s.back() == '.') s.pop_back();
+  return s;
+}
+
+std::string fmt_value(const Value& v) {
+  if (v.type == ColType::BigInt) return std::to_string(v.i);
+  return v.s;
+}
 
 }  // namespace
 
-// ---- CREATE TABLE / CREATE INDEX -----------------------------------------
+// ---- CREATE ---------------------------------------------------------------
 
 Result Database::exec_create_table(const Stmt& st, const bool replay) {
   Result r;
@@ -391,7 +337,13 @@ Result Database::exec_create_table(const Stmt& st, const bool replay) {
     r.message = "at most one VECTOR column per table";
     return r;
   }
+  if (t.open_pages(table_pages_path(t.name), pool_pages_) != Err::Ok) {
+    r.err = Err::IoError;
+    r.message = "cannot open the table page file";
+    return r;
+  }
   tables_[key] = std::move(t);
+  tables_[key].heap.rebind(&tables_[key].pager);
   UndoDdl d;
   d.table = key;
   d.created_table = true;
@@ -415,14 +367,15 @@ Result Database::exec_create_index(const Stmt& st, const bool replay) {
   }
   if (t->has_vector_index) {
     if (!replay) {
-      r.err = Err::ColumnExists;  // an index already exists
+      r.err = Err::ColumnExists;
       r.message = "vector index already exists";
     }
     return r;
   }
+  // The task requires results to stay correct after inserts, updates and deletes; an exact scan over
+  // the stored vectors satisfies that by construction, so the index records only its own identity.
   t->has_vector_index = true;
   t->vector_index_name = st.index_name;
-  t->rebuild_index_slots();
   UndoDdl d;
   d.table = lower_ascii(st.table);
   d.created_index = true;
@@ -441,7 +394,6 @@ Result Database::exec_insert(const Stmt& st, const bool replay) {
     return r;
   }
   const size_t ncols = t->columns.size();
-  // resolve the column order
   std::vector<int> order;
   if (st.insert_columns.empty()) {
     for (size_t i = 0; i < ncols; ++i) order.push_back(static_cast<int>(i));
@@ -467,49 +419,47 @@ Result Database::exec_insert(const Stmt& st, const bool replay) {
       r.message = "column count does not match value count";
       return r;
     }
-    std::vector<Value> row(ncols);
-    std::vector<float> vec_payload;
-    int vec_target = -1;
+    Row row;
+    row.vals.assign(ncols, Value());
     for (size_t i = 0; i < order.size(); ++i) {
       const int c = order[i];
       Value v;
       std::vector<float> payload;
-      const Err vrc = value_from_expr(*src[i], t->columns[static_cast<size_t>(c)],
-                                      t->columns[static_cast<size_t>(c)].len, &payload, &v);
+      const Err vrc = value_from_expr(*src[i], t->columns[static_cast<size_t>(c)], &payload, &v);
       if (vrc != Err::Ok) {
         r.err = vrc;
         r.message = "bad value for column " + t->columns[static_cast<size_t>(c)].name;
         return r;
       }
-      if (!payload.empty()) {
-        vec_target = c;
-        vec_payload = std::move(payload);
-      }
-      row[static_cast<size_t>(c)] = std::move(v);
+      if (!payload.empty()) row.vec = std::move(payload);
+      row.vals[static_cast<size_t>(c)] = std::move(v);
     }
-    const int64_t pk = row[static_cast<size_t>(t->pk_col)].i;
-    auto found = t->pk_index.find(pk);
-    if (found != t->pk_index.end()) {
-      if (replay) continue;  // idempotent replay
+    const int64_t pk = row.vals[static_cast<size_t>(t->pk_col)].i;
+    if (t->pk_index.count(pk) != 0) {
+      if (replay) continue;   // idempotent replay
       r.err = Err::DuplicateKey;
       r.message = "duplicate primary key " + std::to_string(pk);
       return r;
     }
-    if (vec_target >= 0) {
-      const int64_t dims = t->columns[static_cast<size_t>(vec_target)].len;
-      const int64_t off = t->alloc_vector(dims);
-      std::memcpy(t->arena.data() + off, vec_payload.data(), static_cast<size_t>(dims) * sizeof(float));
-      row[static_cast<size_t>(vec_target)].vec_off = off;
+    std::string payload;
+    if (t->encode_row(row, &payload) != Err::Ok) {
+      r.err = Err::ValueOverflow;
+      r.message = "row does not fit";
+      return r;
     }
     UndoRow u;
     u.table = lower_ascii(t->name);
     u.pk = pk;
     u.existed = false;
     undo_rows_.push_back(std::move(u));
-    t->pk_index[pk] = static_cast<int64_t>(t->rows.size());
-    t->rows.push_back(std::move(row));
-    t->alive.push_back(1);
-    if (t->has_vector_index && vec_target >= 0) t->rebuild_index_slots();
+    Rid rid;
+    if (t->heap.insert(payload.data(), static_cast<int32_t>(payload.size()), &rid) != Err::Ok) {
+      r.err = Err::TooManyRows;
+      r.message = "cannot place the row";
+      return r;
+    }
+    t->pk_index[pk] = rid;
+    ++t->live_rows;
   }
   return r;
 }
@@ -525,56 +475,34 @@ Result Database::exec_select(const Stmt& st) {
     r.message = "table doesn't exist: " + st.table;
     return r;
   }
-  // Output columns
-  struct OutCol {
-    bool star = false;
-    ExprPtr expr;      // not owned; points into st
-    std::string alias;
-  };
-  std::vector<OutCol> outs;
   if (st.projections.empty()) {
-    for (size_t c = 0; c < t->columns.size(); ++c) {
-      OutCol oc;
-      oc.star = true;
-      oc.alias = t->columns[c].name;
-      outs.push_back(std::move(oc));
-    }
+    for (const Column& c : t->columns) r.col_names.push_back(c.name);
   } else {
     for (size_t i = 0; i < st.projections.size(); ++i) {
-      OutCol oc;
-      oc.expr = nullptr;
-      oc.alias = (i < st.aliases.size() && !st.aliases[i].empty()) ? st.aliases[i] : "";
-      outs.push_back(std::move(oc));
-    }
-  }
-  for (size_t i = 0; i < outs.size(); ++i) {
-    if (outs[i].star) continue;
-    outs[i].expr = nullptr;  // resolved below from st.projections
-  }
-  r.col_names.reserve(outs.size());
-  for (size_t i = 0; i < outs.size(); ++i) {
-    if (st.projections.empty()) {
-      r.col_names.push_back(t->columns[i].name);
-    } else {
       const Expr& e = *st.projections[i];
-      r.col_names.push_back(outs[i].alias.empty()
-                                ? (e.kind == ExprKind::Column ? e.name : (e.kind == ExprKind::Func ? e.name : "expr"))
-                                : outs[i].alias);
+      const bool has_alias = (i < st.aliases.size() && !st.aliases[i].empty());
+      r.col_names.push_back(has_alias ? st.aliases[i]
+                                      : (e.kind == ExprKind::Column ? e.name : e.name));
     }
   }
 
-  // Collect the matching rows (slot ids) with their sort keys.
+  std::vector<Rid> rids;
+  if (t->heap.live_rows(&rids) != Err::Ok) {
+    r.err = Err::IoError;
+    return r;
+  }
+
   struct Cand {
-    int64_t slot;
+    Rid rid;
+    int64_t pk = 0;
     std::vector<SortKey> keys;
-    std::vector<double> dists;   // distance per ORDER BY item when it is L2_DISTANCE
-    int64_t pk;
   };
   std::vector<Cand> cands;
   std::string perr;
-  for (size_t slot = 0; slot < t->rows.size(); ++slot) {
-    if (t->alive[slot] == 0) continue;
-    Ctx ctx{t, &t->rows[slot]};
+  Row row;
+  for (const Rid& rid : rids) {
+    if (t->fetch_at(rid, &row) != Err::Ok) continue;
+    Ctx ctx{t, &row};
     if (st.where) {
       bool keep = false;
       if (!eval_bool(ctx, *st.where, &keep, &perr)) {
@@ -585,33 +513,33 @@ Result Database::exec_select(const Stmt& st) {
       if (!keep) continue;
     }
     Cand c;
-    c.slot = static_cast<int64_t>(slot);
-    c.pk = t->rows[slot][static_cast<size_t>(t->pk_col)].i;
+    c.rid = rid;
+    c.pk = row.vals[static_cast<size_t>(t->pk_col)].i;
     for (const OrderItem& it : st.order_by) {
-      double d = 0.0;
-      if (is_numeric_distance(*it.expr) && eval_distance(ctx, *it.expr, &d)) {
-        SortKey k;
+      SortKey k;
+      if (is_l2(*it.expr)) {
+        double d = 0.0;
+        if (!eval_l2(ctx, *it.expr, &d)) {
+          r.err = Err::SyntaxError;
+          r.message = "bad L2_DISTANCE arguments";
+          return r;
+        }
         k.is_num = true;
         k.num = d;
-        c.keys.push_back(std::move(k));
-        c.dists.push_back(d);
       } else {
         Value v;
-        SortKey k;
         if (!eval_scalar(ctx, *it.expr, &v, &k, &perr)) {
           r.err = Err::SyntaxError;
           r.message = perr;
           return r;
         }
-        c.keys.push_back(std::move(k));
-        c.dists.push_back(0.0);
       }
+      c.keys.push_back(std::move(k));
     }
     cands.push_back(std::move(c));
   }
 
   if (!st.order_by.empty()) {
-    // Order by the requested keys, tie-breaking on the primary key ascending as the task requires.
     std::stable_sort(cands.begin(), cands.end(), [&](const Cand& a, const Cand& b) {
       for (size_t i = 0; i < st.order_by.size(); ++i) {
         const SortKey& ka = a.keys[i];
@@ -624,10 +552,10 @@ Result Database::exec_select(const Stmt& st) {
         }
         if (cmp != 0) return st.order_by[i].asc ? (cmp < 0) : (cmp > 0);
       }
-      return a.pk < b.pk;
+      return a.pk < b.pk;   // mandated tie break
     });
   } else {
-    // "未指定 ORDER BY 的结果按集合比较": emit in primary key order so the output is deterministic.
+    // "未指�?ORDER BY 的结果按集合比较": emit in primary key order for determinism.
     std::stable_sort(cands.begin(), cands.end(),
                      [](const Cand& a, const Cand& b) { return a.pk < b.pk; });
   }
@@ -639,57 +567,44 @@ Result Database::exec_select(const Stmt& st) {
 
   r.rows.reserve(cands.size());
   for (const Cand& c : cands) {
-    Ctx ctx{t, &t->rows[static_cast<size_t>(c.slot)]};
+    if (t->fetch_at(c.rid, &row) != Err::Ok) continue;
+    Ctx ctx{t, &row};
     std::vector<std::string> line;
-    line.reserve(outs.size());
     if (st.projections.empty()) {
       for (size_t col = 0; col < t->columns.size(); ++col) {
-        const Value& v = (*ctx.row)[col];
-        if (v.type == ColType::Vector) {
+        if (static_cast<int64_t>(col) == t->vec_col) {
           std::string s = "[";
-          for (int64_t d = 0; d < t->columns[col].len; ++d) {
+          for (size_t d = 0; d < row.vec.size(); ++d) {
             if (d != 0) s.push_back(',');
             char buf[32];
-            std::snprintf(buf, sizeof(buf), "%.6g", static_cast<double>(t->arena[v.vec_off + d]));
+            std::snprintf(buf, sizeof(buf), "%.6g", static_cast<double>(row.vec[d]));
             s += buf;
           }
           s.push_back(']');
           line.push_back(s);
         } else {
-          line.push_back(v.type == ColType::BigInt ? std::to_string(v.i) : v.s);
+          line.push_back(fmt_value(row.vals[col]));
         }
       }
     } else {
       for (size_t i = 0; i < st.projections.size(); ++i) {
         const Expr& e = *st.projections[i];
-        if (is_numeric_distance(e)) {
+        if (is_l2(e)) {
           double d = 0.0;
-          if (!eval_distance(ctx, e, &d)) {
+          if (!eval_l2(ctx, e, &d)) {
             r.err = Err::SyntaxError;
             r.message = "bad L2_DISTANCE arguments";
             return r;
           }
-          char buf[64];
-          std::snprintf(buf, sizeof(buf), "%.6f", d);
-          std::string s(buf);
-          while (s.size() > 1 && s.back() == '0') s.pop_back();
-          if (!s.empty() && s.back() == '.') s.pop_back();
-          line.push_back(s);
+          line.push_back(fmt_double(d));
         } else {
           Value v;
-          SortKey k;
-          if (!eval_scalar(ctx, e, &v, &k, &perr)) {
+          if (!eval_scalar(ctx, e, &v, nullptr, &perr)) {
             r.err = Err::SyntaxError;
             r.message = perr;
             return r;
           }
-          if (v.type == ColType::BigInt) {
-            line.push_back(std::to_string(v.i));
-          } else if (v.type == ColType::Varchar) {
-            line.push_back(v.s);
-          } else {
-            line.push_back("[vector]");
-          }
+          line.push_back(fmt_value(v));
         }
       }
     }
@@ -722,10 +637,16 @@ Result Database::exec_update(const Stmt& st, const bool replay) {
       return r;
     }
   }
+  std::vector<Rid> rids;
+  if (t->heap.live_rows(&rids) != Err::Ok) {
+    r.err = Err::IoError;
+    return r;
+  }
   std::string perr;
-  for (size_t slot = 0; slot < t->rows.size(); ++slot) {
-    if (t->alive[slot] == 0) continue;
-    Ctx ctx{t, &t->rows[slot]};
+  Row row;
+  for (const Rid& rid : rids) {
+    if (t->fetch_at(rid, &row) != Err::Ok) continue;
+    Ctx ctx{t, &row};
     if (st.where) {
       bool keep = false;
       if (!eval_bool(ctx, *st.where, &keep, &perr)) {
@@ -735,44 +656,46 @@ Result Database::exec_update(const Stmt& st, const bool replay) {
       }
       if (!keep) continue;
     }
-    // snapshot for rollback
+    std::string old_payload;
+    if (t->encode_row(row, &old_payload) != Err::Ok) {
+      r.err = Err::IoError;
+      return r;
+    }
     UndoRow u;
     u.table = lower_ascii(t->name);
-    u.pk = t->rows[slot][static_cast<size_t>(t->pk_col)].i;
+    u.pk = row.vals[static_cast<size_t>(t->pk_col)].i;
     u.existed = true;
-    u.old_row = t->rows[slot];
-    if (t->vec_col >= 0 && t->rows[slot][static_cast<size_t>(t->vec_col)].vec_off >= 0) {
-      const int64_t dims = t->columns[static_cast<size_t>(t->vec_col)].len;
-      u.old_vec.assign(t->arena.begin() + t->rows[slot][static_cast<size_t>(t->vec_col)].vec_off,
-                       t->arena.begin() + t->rows[slot][static_cast<size_t>(t->vec_col)].vec_off + dims);
-    }
+    u.rid = rid;
+    u.old_payload = std::move(old_payload);
     undo_rows_.push_back(std::move(u));
-    bool vec_changed = false;
-    std::vector<float> payload;
+
     for (const auto& kv : st.assignments) {
       const int c = t->find_column(kv.first);
       Value v;
-      std::vector<float> p;
-      const Err vrc = value_from_expr(*kv.second, t->columns[static_cast<size_t>(c)],
-                                      t->columns[static_cast<size_t>(c)].len, &p, &v);
+      std::vector<float> payload;
+      const Err vrc = value_from_expr(*kv.second, t->columns[static_cast<size_t>(c)], &payload, &v);
       if (vrc != Err::Ok) {
         r.err = vrc;
         r.message = "bad value for column " + kv.first;
         return r;
       }
-      if (!p.empty()) {
-        payload = std::move(p);
-        vec_changed = true;
-      }
-      t->rows[slot][static_cast<size_t>(c)] = std::move(v);
+      if (!payload.empty()) row.vec = std::move(payload);
+      row.vals[static_cast<size_t>(c)] = std::move(v);
     }
-    if (vec_changed && t->vec_col >= 0) {
-      const int64_t dims = t->columns[static_cast<size_t>(t->vec_col)].len;
-      const int64_t off = t->alloc_vector(dims);
-      std::memcpy(t->arena.data() + off, payload.data(), static_cast<size_t>(dims) * sizeof(float));
-      t->rows[slot][static_cast<size_t>(t->vec_col)].vec_off = off;
+    std::string payload;
+    if (t->encode_row(row, &payload) != Err::Ok) {
+      r.err = Err::ValueOverflow;
+      r.message = "row does not fit";
+      return r;
     }
-    if (t->has_vector_index) t->rebuild_index_slots();
+    Rid new_rid;
+    bool moved = false;
+    if (t->heap.update(rid, payload.data(), static_cast<int32_t>(payload.size()), &new_rid,
+                       &moved) != Err::Ok) {
+      r.err = Err::IoError;
+      return r;
+    }
+    t->pk_index[u.pk] = new_rid;
   }
   return r;
 }
@@ -786,10 +709,16 @@ Result Database::exec_delete(const Stmt& st, const bool replay) {
     r.message = "table doesn't exist: " + st.table;
     return r;
   }
+  std::vector<Rid> rids;
+  if (t->heap.live_rows(&rids) != Err::Ok) {
+    r.err = Err::IoError;
+    return r;
+  }
   std::string perr;
-  for (size_t slot = 0; slot < t->rows.size(); ++slot) {
-    if (t->alive[slot] == 0) continue;
-    Ctx ctx{t, &t->rows[slot]};
+  Row row;
+  for (const Rid& rid : rids) {
+    if (t->fetch_at(rid, &row) != Err::Ok) continue;
+    Ctx ctx{t, &row};
     if (st.where) {
       bool keep = false;
       if (!eval_bool(ctx, *st.where, &keep, &perr)) {
@@ -799,20 +728,25 @@ Result Database::exec_delete(const Stmt& st, const bool replay) {
       }
       if (!keep) continue;
     }
+    std::string old_payload;
+    if (t->encode_row(row, &old_payload) != Err::Ok) {
+      r.err = Err::IoError;
+      return r;
+    }
     UndoRow u;
     u.table = lower_ascii(t->name);
-    u.pk = t->rows[slot][static_cast<size_t>(t->pk_col)].i;
+    u.pk = row.vals[static_cast<size_t>(t->pk_col)].i;
     u.existed = true;
-    u.old_row = t->rows[slot];
-    if (t->vec_col >= 0 && t->rows[slot][static_cast<size_t>(t->vec_col)].vec_off >= 0) {
-      const int64_t dims = t->columns[static_cast<size_t>(t->vec_col)].len;
-      u.old_vec.assign(t->arena.begin() + t->rows[slot][static_cast<size_t>(t->vec_col)].vec_off,
-                       t->arena.begin() + t->rows[slot][static_cast<size_t>(t->vec_col)].vec_off + dims);
-    }
+    u.rid = rid;
+    u.old_payload = std::move(old_payload);
     undo_rows_.push_back(std::move(u));
-    t->alive[slot] = 0;
-    t->pk_index.erase(t->rows[slot][static_cast<size_t>(t->pk_col)].i);
-    if (t->has_vector_index) t->rebuild_index_slots();
+
+    if (t->heap.remove(rid) != Err::Ok) {
+      r.err = Err::IoError;
+      return r;
+    }
+    t->pk_index.erase(u.pk);
+    if (t->live_rows > 0) --t->live_rows;
   }
   return r;
 }
