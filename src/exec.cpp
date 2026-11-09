@@ -708,11 +708,19 @@ Result Database::exec_select(const Stmt& st) {
       return r;
     }
   }
+  // A projection may be the vector column itself ("SELECT id, embedding FROM docs"), which is rendered
+  // as a literal the same way SELECT * renders it.
+  std::vector<char> proj_vec(st.projections.size(), 0);
   for (size_t i = 0; i < st.projections.size(); ++i) {
     if (!resolve_l2(*st.projections[i], &proj_l2[i])) {
       r.err = Err::SyntaxError;
       r.message = "bad L2_DISTANCE arguments";
       return r;
+    }
+    const Expr& e = *st.projections[i];
+    if (e.kind == ExprKind::Column && dims > 0 &&
+        t->find_column(e.name) == static_cast<int>(t->vec_col)) {
+      proj_vec[i] = 1;
     }
   }
 
@@ -725,21 +733,26 @@ Result Database::exec_select(const Stmt& st) {
   std::string perr;
   Row paged_row;
 
+  // Renders a vector as the literal form the results compare against.
+  auto render_vec = [&](const float* vec) {
+    std::string s = "[";
+    for (int64_t d = 0; d < dims; ++d) {
+      if (d != 0) s.push_back(',');
+      char buf[32];
+      std::snprintf(buf, sizeof(buf), "%.6g", static_cast<double>(vec[d]));
+      s += buf;
+    }
+    s.push_back(']');
+    return s;
+  };
+
   // Builds one output line for a row.
   auto project = [&](const Row& row, const float* vec, std::vector<std::string>* line) -> bool {
     Ctx ctx{t, &row, vec};
     if (st.projections.empty()) {
       for (size_t col = 0; col < t->columns.size(); ++col) {
         if (static_cast<int64_t>(col) == t->vec_col) {
-          std::string s = "[";
-          for (int64_t d = 0; d < dims; ++d) {
-            if (d != 0) s.push_back(',');
-            char buf[32];
-            std::snprintf(buf, sizeof(buf), "%.6g", static_cast<double>(vec[d]));
-            s += buf;
-          }
-          s.push_back(']');
-          line->push_back(s);
+          line->push_back(render_vec(vec));
         } else {
           line->push_back(fmt_value(row.vals[col]));
         }
@@ -748,7 +761,9 @@ Result Database::exec_select(const Stmt& st) {
     }
     for (size_t i = 0; i < st.projections.size(); ++i) {
       const Expr& e = *st.projections[i];
-      if (!proj_l2[i].q.empty()) {
+      if (proj_vec[i]) {
+        line->push_back(render_vec(vec));
+      } else if (!proj_l2[i].q.empty()) {
         line->push_back(fmt_double(l2_distance(vec, proj_l2[i].q.data(), dims)));
       } else {
         Value v;

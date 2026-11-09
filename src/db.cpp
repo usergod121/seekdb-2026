@@ -291,6 +291,9 @@ Err Database::undo_apply_from(const size_t row_mark, const size_t ddl_mark) {
     const UndoRow& u = undo_rows_[idx - 1];
     Table* t = find_table(u.table);
     if (t == nullptr) continue;
+    // The undo touches the heap directly, so the table's in-memory row cache has to go too: a SELECT
+    // that ran inside the transaction may have built one over the pre-rollback state.
+    t->invalidate_cache();
     auto it = t->pk_index.find(u.pk);
     if (!u.existed) {
       if (it != t->pk_index.end()) {
