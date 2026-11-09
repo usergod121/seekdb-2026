@@ -635,9 +635,10 @@ struct HeapItem {
   Rid rid;
 };
 
-// "Worse than" for the bounded max-heap: the largest distance (then the largest primary key) sits on
-// top and is evicted first, so ties keep the smallest primary key as the task requires.
-inline bool worse(const HeapItem& a, const HeapItem& b) {
+// Ranks before: smaller distance first and, among equal distances, the smaller primary key, which is the
+// tie order the task documents. Passing this to the heap algorithms puts the element that ranks last at
+// the front, so the front is exactly what a bounded TopK should evict.
+inline bool better(const HeapItem& a, const HeapItem& b) {
   if (a.dist != b.dist) return a.dist < b.dist;
   return a.pk < b.pk;
 }
@@ -793,7 +794,7 @@ Result Database::exec_select(const Stmt& st) {
               t->cache_rows[i].vals[static_cast<size_t>(t->pk_col)].i >= worst.pk) {
             continue;
           }
-          std::pop_heap(heap.begin(), heap.end(), worse);
+          std::pop_heap(heap.begin(), heap.end(), better);
           heap.pop_back();
         }
         HeapItem item;
@@ -801,7 +802,7 @@ Result Database::exec_select(const Stmt& st) {
         item.pk = t->cache_rows[i].vals[static_cast<size_t>(t->pk_col)].i;
         item.cache_idx = static_cast<int64_t>(i);
         heap.push_back(item);
-        std::push_heap(heap.begin(), heap.end(), worse);
+        std::push_heap(heap.begin(), heap.end(), better);
       }
       std::sort(heap.begin(), heap.end(), [](const HeapItem& a, const HeapItem& b) {
         if (a.dist != b.dist) return a.dist < b.dist;
@@ -828,11 +829,12 @@ Result Database::exec_select(const Stmt& st) {
         item.cache_idx = static_cast<int64_t>(i);
         if (heap.size() < k) {
           heap.push_back(item);
-          std::push_heap(heap.begin(), heap.end(), worse);
-        } else if (worse(heap.front(), item)) {
-          std::pop_heap(heap.begin(), heap.end(), worse);
+          std::push_heap(heap.begin(), heap.end(), better);
+        } else if (better(item, heap.front())) {
+          // The row ranks before the row that currently ranks last, so it takes its place.
+          std::pop_heap(heap.begin(), heap.end(), better);
           heap.back() = item;
-          std::push_heap(heap.begin(), heap.end(), worse);
+          std::push_heap(heap.begin(), heap.end(), better);
         }
       }
       std::sort(heap.begin(), heap.end(), [](const HeapItem& a, const HeapItem& b) {
