@@ -21,6 +21,10 @@ double l2_distance(const float* a, const float* b, int64_t dims);
 // Batch form so the contiguous cache is walked with one call per block instead of a call per row.
 void l2_batch(const float* base, const float* q, int64_t n, int64_t dims, float* out);
 
+// Same walk, but each entry is the SQUARED distance. A TopK only needs the order, and the square root
+// is monotone, so the k surviving rows can take it instead of every row.
+void l2_batch_sq(const float* base, const float* q, int64_t n, int64_t dims, float* out);
+
 }  // namespace mv
 
 

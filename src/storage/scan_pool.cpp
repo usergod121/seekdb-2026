@@ -6,6 +6,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
@@ -106,7 +107,7 @@ void scan_range(const float* base, const float* q, const int64_t dims, const int
   float* const dists = block_scratch(static_cast<size_t>(kBlockRows * dims));
   for (int64_t start = begin; start < end; start += kBlockRows) {
     const int64_t count = std::min(kBlockRows, end - start);
-    l2_batch(base + start * dims, q, count, dims, dists);
+    l2_batch_sq(base + start * dims, q, count, dims, dists);
     for (int64_t i = 0; i < count; ++i) {
       const int64_t row = start + i;
       if (keep != nullptr && !keep(keep_ctx, row)) continue;
@@ -120,6 +121,11 @@ void scan_range(const float* base, const float* q, const int64_t dims, const int
   out->swap(top.items);
   std::sort(out->begin(), out->end(), ranks_before);
   if (static_cast<int64_t>(out->size()) > k) out->resize(static_cast<size_t>(k));
+}
+
+// The scan keeps squared distances; only the surviving rows need the square root.
+void take_square_roots(std::vector<VecHit>* hits) {
+  for (VecHit& hit : *hits) hit.dist = std::sqrt(hit.dist);
 }
 
 class Pool {
@@ -230,6 +236,7 @@ void l2_topk_parallel(const float* base, const float* q, int64_t n, int64_t dims
   const int workers = Pool::instance().size();
   if (workers <= 1 || n * dims < kParallelThreshold) {
     scan_range(base, q, dims, 0, n, k, pks, keep, keep_ctx, out);
+    take_square_roots(out);
     return;
   }
 
@@ -249,6 +256,7 @@ void l2_topk_parallel(const float* base, const float* q, int64_t n, int64_t dims
   for (const auto& part : partial) out->insert(out->end(), part.begin(), part.end());
   std::sort(out->begin(), out->end(), ranks_before);
   if (static_cast<int64_t>(out->size()) > k) out->resize(static_cast<size_t>(k));
+  take_square_roots(out);
 }
 
 }  // namespace mv

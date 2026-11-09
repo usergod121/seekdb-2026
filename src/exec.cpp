@@ -54,6 +54,66 @@ bool eval_const_int(const Expr& e, int64_t* out) {
   return false;
 }
 
+// Parses the spelling a query vector actually uses: an optional sign, up to nine mantissa digits, and
+// an optional power-of-ten exponent. The mantissa stays exact in a 64 bit integer and the scaling uses
+// exact powers of ten, so the result is the correctly rounded float. Anything else returns false.
+bool parse_plain_decimal(const char* p, const char* end, const char** after, float* out) {
+  static const double kPow10[] = {1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,  1e8,  1e9,
+                                  1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19,
+                                  1e20, 1e21, 1e22};
+  const char* q = p;
+  bool negative = false;
+  if (q < end && (*q == '-' || *q == '+')) {
+    negative = (*q == '-');
+    ++q;
+  }
+  uint64_t mantissa = 0;
+  int digits = 0;
+  int fraction = 0;
+  bool any = false;
+  while (q < end && *q >= '0' && *q <= '9') {
+    if (++digits > 9) return false;
+    mantissa = mantissa * 10 + static_cast<uint64_t>(*q - '0');
+    ++q;
+    any = true;
+  }
+  if (q < end && *q == '.') {
+    ++q;
+    while (q < end && *q >= '0' && *q <= '9') {
+      if (++digits > 9) return false;
+      mantissa = mantissa * 10 + static_cast<uint64_t>(*q - '0');
+      ++q;
+      ++fraction;
+      any = true;
+    }
+  }
+  if (!any) return false;
+  int exponent = -fraction;
+  if (q < end && (*q == 'e' || *q == 'E')) {
+    ++q;
+    int sign = 1;
+    if (q < end && (*q == '-' || *q == '+')) {
+      sign = (*q == '-') ? -1 : 1;
+      ++q;
+    }
+    int value = 0;
+    int count = 0;
+    while (q < end && *q >= '0' && *q <= '9') {
+      if (++count > 2) return false;
+      value = value * 10 + (*q - '0');
+      ++q;
+    }
+    if (count == 0) return false;
+    exponent += sign * value;
+  }
+  if (exponent < -22 || exponent > 22) return false;
+  double scaled = static_cast<double>(mantissa);
+  scaled = (exponent >= 0) ? scaled * kPow10[exponent] : scaled / kPow10[-exponent];
+  *out = static_cast<float>(negative ? -scaled : scaled);
+  *after = q;
+  return true;
+}
+
 // Parses a vector from a bare list [1,2,3] or its quoted form '[1,2,3]' - the task package fixes the
 // spelling, so both are accepted.
 // Scans "[1,2,3]" (or the quoted form) number by number: parsing a 128 dimension vector through the SQL
@@ -78,17 +138,21 @@ bool vector_from_expr(const Expr& e, std::vector<float>* out) {
       return p == end;
     }
     if (p >= end) return false;
-    // from_chars parses a plain decimal number without touching the locale and is the fastest portable
-    // way to do it; anything it rejects falls back to strtof so unusual spellings still work.
     float v = 0.0f;
-    const std::from_chars_result parsed = std::from_chars(p, end, v);
-    if (parsed.ec == std::errc() && parsed.ptr != p) {
-      p = parsed.ptr;
+    const char* after = p;
+    if (parse_plain_decimal(p, end, &after, &v)) {
+      p = after;
     } else {
-      char* next = nullptr;
-      v = std::strtof(p, &next);
-      if (next == p) return false;
-      p = next;
+      // Anything the fast path does not cover goes through from_chars, and then strtof.
+      const std::from_chars_result parsed = std::from_chars(p, end, v);
+      if (parsed.ec == std::errc() && parsed.ptr != p) {
+        p = parsed.ptr;
+      } else {
+        char* next = nullptr;
+        v = std::strtof(p, &next);
+        if (next == p) return false;
+        p = next;
+      }
     }
     out->push_back(v);
   }

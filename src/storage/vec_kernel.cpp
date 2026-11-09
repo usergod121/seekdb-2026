@@ -129,23 +129,107 @@ __attribute__((target("avx2,fma"))) void l2_batch_avx2(const float* base, const 
 
 }  // namespace
 
-void l2_batch(const float* base, const float* q, const int64_t n, const int64_t dims, float* out) {
-  static const bool have_avx2 = []() -> bool {
+namespace {
+
+void l2_batch_sq_scalar(const float* base, const float* q, const int64_t n, const int64_t dims,
+                        float* out) {
+  for (int64_t i = 0; i < n; ++i) {
+    const float* row = base + i * dims;
+    float sum = 0.0f;
+    for (int64_t d = 0; d < dims; ++d) {
+      const float diff = row[d] - q[d];
+      sum += diff * diff;
+    }
+    out[i] = sum;
+  }
+}
+
+#if defined(MV_X86)
+// Same structure as the distance kernel, without the square root.
+__attribute__((target("avx2,fma"))) void l2_batch_sq_avx2(const float* base, const float* q,
+                                                          const int64_t n, const int64_t dims,
+                                                          float* out) {
+  int64_t i = 0;
+  for (; i + 4 <= n; i += 4) {
+    __m256 a0 = _mm256_setzero_ps();
+    __m256 a1 = _mm256_setzero_ps();
+    __m256 a2 = _mm256_setzero_ps();
+    __m256 a3 = _mm256_setzero_ps();
+    const float* r0 = base + (i + 0) * dims;
+    const float* r1 = base + (i + 1) * dims;
+    const float* r2 = base + (i + 2) * dims;
+    const float* r3 = base + (i + 3) * dims;
+    int64_t d = 0;
+    for (; d + 8 <= dims; d += 8) {
+      const __m256 vq = _mm256_loadu_ps(q + d);
+      const __m256 d0 = _mm256_sub_ps(_mm256_loadu_ps(r0 + d), vq);
+      const __m256 d1 = _mm256_sub_ps(_mm256_loadu_ps(r1 + d), vq);
+      const __m256 d2 = _mm256_sub_ps(_mm256_loadu_ps(r2 + d), vq);
+      const __m256 d3 = _mm256_sub_ps(_mm256_loadu_ps(r3 + d), vq);
+      a0 = _mm256_fmadd_ps(d0, d0, a0);
+      a1 = _mm256_fmadd_ps(d1, d1, a1);
+      a2 = _mm256_fmadd_ps(d2, d2, a2);
+      a3 = _mm256_fmadd_ps(d3, d3, a3);
+    }
+    __m256 acc[4] = {a0, a1, a2, a3};
+    for (int r = 0; r < 4; ++r) {
+      __m128 lo = _mm256_castps256_ps128(acc[r]);
+      __m128 hi = _mm256_extractf128_ps(acc[r], 1);
+      __m128 s4 = _mm_add_ps(lo, hi);
+      s4 = _mm_hadd_ps(s4, s4);
+      s4 = _mm_hadd_ps(s4, s4);
+      float sum = _mm_cvtss_f32(s4);
+      const float* row = base + (i + r) * dims;
+      for (int64_t dd = d; dd < dims; ++dd) {
+        const float diff = row[dd] - q[dd];
+        sum += diff * diff;
+      }
+      out[i + r] = sum;
+    }
+  }
+  for (; i < n; ++i) {
+    const float* row = base + i * dims;
+    float sum = 0.0f;
+    for (int64_t d = 0; d < dims; ++d) {
+      const float diff = row[d] - q[d];
+      sum += diff * diff;
+    }
+    out[i] = sum;
+  }
+}
+#endif
+
+bool have_avx2_fma() {
+  static const bool yes = []() -> bool {
 #if defined(MV_X86)
     return __builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma");
 #else
     return false;
 #endif
   }();
+  return yes;
+}
+
+}  // namespace
+
+void l2_batch(const float* base, const float* q, const int64_t n, const int64_t dims, float* out) {
 #if defined(MV_X86)
-  if (have_avx2) {
+  if (have_avx2_fma()) {
     l2_batch_avx2(base, q, n, dims, out);
     return;
   }
-#else
-  (void)have_avx2;
 #endif
   l2_batch_scalar(base, q, n, dims, out);
+}
+
+void l2_batch_sq(const float* base, const float* q, const int64_t n, const int64_t dims, float* out) {
+#if defined(MV_X86)
+  if (have_avx2_fma()) {
+    l2_batch_sq_avx2(base, q, n, dims, out);
+    return;
+  }
+#endif
+  l2_batch_sq_scalar(base, q, n, dims, out);
 }
 
 }  // namespace mv
