@@ -762,38 +762,71 @@ Result Database::exec_select(const Stmt& st) {
     // Compile the filter once: the per-row test then costs a load and a compare.
     const Pred pred = compile_pred(st.where.get(), *t);
     const bool use_pred = pred.any || (st.where == nullptr);
-    for (size_t i = 0; i < t->cache_rows.size(); ++i) {
-      const Row& row = t->cache_rows[i];
-      if (st.where && use_pred) {
-        if (!pred_holds(pred, row)) continue;
-      } else if (st.where) {
-        Ctx ctx{t, &row, t->cache_vec(static_cast<int64_t>(i))};
-        bool keep = false;
-        if (!eval_bool(ctx, *st.where, &keep, &perr)) {
-          r.err = Err::SyntaxError;
-          r.message = perr;
-          return r;
+    const bool no_filter = (st.where == nullptr);
+    if (k == 0) {
+      // nothing to return
+    } else if (no_filter) {
+      // Unfiltered: one batched pass over the contiguous cache, then a bounded heap. The reject test is
+      // a single float compare against the current worst distance, so most rows never touch the heap.
+      const size_t n = t->cache_rows.size();
+      std::vector<float> dists(n);
+      l2_batch(t->cache_vecs.data(), q, static_cast<int64_t>(n), dims, dists.data());
+      for (size_t i = 0; i < n; ++i) {
+        const float d = dists[i];
+        if (heap.size() == k) {
+          const HeapItem& worst = heap.front();
+          if (d > worst.dist) continue;
+          if (d == worst.dist &&
+              t->cache_rows[i].vals[static_cast<size_t>(t->pk_col)].i >= worst.pk) {
+            continue;
+          }
+          std::pop_heap(heap.begin(), heap.end(), worse);
+          heap.pop_back();
         }
-        if (!keep) continue;
-      }
-      if (k == 0) continue;
-      HeapItem item;
-      item.dist = l2_distance(t->cache_vec(static_cast<int64_t>(i)), q, dims);
-      item.pk = row.vals[static_cast<size_t>(t->pk_col)].i;
-      item.cache_idx = static_cast<int64_t>(i);
-      if (heap.size() < k) {
+        HeapItem item;
+        item.dist = static_cast<double>(d);
+        item.pk = t->cache_rows[i].vals[static_cast<size_t>(t->pk_col)].i;
+        item.cache_idx = static_cast<int64_t>(i);
         heap.push_back(item);
         std::push_heap(heap.begin(), heap.end(), worse);
-      } else if (worse(heap.front(), item)) {
-        std::pop_heap(heap.begin(), heap.end(), worse);
-        heap.back() = item;
-        std::push_heap(heap.begin(), heap.end(), worse);
       }
+      std::sort(heap.begin(), heap.end(), [](const HeapItem& a, const HeapItem& b) {
+        if (a.dist != b.dist) return a.dist < b.dist;
+        return a.pk < b.pk;
+      });
+    } else {
+      for (size_t i = 0; i < t->cache_rows.size(); ++i) {
+        const Row& row = t->cache_rows[i];
+        if (use_pred) {
+          if (!pred_holds(pred, row)) continue;
+        } else {
+          Ctx ctx{t, &row, t->cache_vec(static_cast<int64_t>(i))};
+          bool keep = false;
+          if (!eval_bool(ctx, *st.where, &keep, &perr)) {
+            r.err = Err::SyntaxError;
+            r.message = perr;
+            return r;
+          }
+          if (!keep) continue;
+        }
+        HeapItem item;
+        item.dist = l2_distance(t->cache_vec(static_cast<int64_t>(i)), q, dims);
+        item.pk = row.vals[static_cast<size_t>(t->pk_col)].i;
+        item.cache_idx = static_cast<int64_t>(i);
+        if (heap.size() < k) {
+          heap.push_back(item);
+          std::push_heap(heap.begin(), heap.end(), worse);
+        } else if (worse(heap.front(), item)) {
+          std::pop_heap(heap.begin(), heap.end(), worse);
+          heap.back() = item;
+          std::push_heap(heap.begin(), heap.end(), worse);
+        }
+      }
+      std::sort(heap.begin(), heap.end(), [](const HeapItem& a, const HeapItem& b) {
+        if (a.dist != b.dist) return a.dist < b.dist;
+        return a.pk < b.pk;
+      });
     }
-    std::sort(heap.begin(), heap.end(), [](const HeapItem& a, const HeapItem& b) {
-      if (a.dist != b.dist) return a.dist < b.dist;
-      return a.pk < b.pk;
-    });
     r.rows.reserve(heap.size());
     for (const HeapItem& item : heap) {
       const Row& row = t->cache_rows[static_cast<size_t>(item.cache_idx)];

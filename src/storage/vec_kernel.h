@@ -17,4 +17,11 @@ L2Fn l2_kernel();
 // Convenience wrapper around the resolved kernel.
 double l2_distance(const float* a, const float* b, int64_t dims);
 
+// Computes n distances from consecutive vectors at `base` (row i at base + i*dims) against `q`.
+// Batch form so the contiguous cache is walked with one call per block instead of a call per row.
+void l2_batch(const float* base, const float* q, int64_t n, int64_t dims, float* out);
+
 }  // namespace mv
+
+
+

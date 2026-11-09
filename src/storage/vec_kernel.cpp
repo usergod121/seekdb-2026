@@ -66,3 +66,86 @@ double l2_distance(const float* a, const float* b, const int64_t dims) {
 }
 
 }  // namespace mv
+namespace mv {
+
+namespace {
+
+void l2_batch_scalar(const float* base, const float* q, const int64_t n, const int64_t dims,
+                     float* out) {
+  for (int64_t i = 0; i < n; ++i) {
+    out[i] = static_cast<float>(l2_scalar(base + i * dims, q, dims));
+  }
+}
+
+#if defined(MV_X86)
+// Four rows per pass: independent accumulators keep the FMA pipeline busy while the query vector is
+// reused from registers.
+__attribute__((target("avx2,fma"))) void l2_batch_avx2(const float* base, const float* q,
+                                                       const int64_t n, const int64_t dims,
+                                                       float* out) {
+  int64_t i = 0;
+  for (; i + 4 <= n; i += 4) {
+    __m256 a0 = _mm256_setzero_ps();
+    __m256 a1 = _mm256_setzero_ps();
+    __m256 a2 = _mm256_setzero_ps();
+    __m256 a3 = _mm256_setzero_ps();
+    const float* r0 = base + (i + 0) * dims;
+    const float* r1 = base + (i + 1) * dims;
+    const float* r2 = base + (i + 2) * dims;
+    const float* r3 = base + (i + 3) * dims;
+    int64_t d = 0;
+    for (; d + 8 <= dims; d += 8) {
+      const __m256 vq = _mm256_loadu_ps(q + d);
+      const __m256 d0 = _mm256_sub_ps(_mm256_loadu_ps(r0 + d), vq);
+      const __m256 d1 = _mm256_sub_ps(_mm256_loadu_ps(r1 + d), vq);
+      const __m256 d2 = _mm256_sub_ps(_mm256_loadu_ps(r2 + d), vq);
+      const __m256 d3 = _mm256_sub_ps(_mm256_loadu_ps(r3 + d), vq);
+      a0 = _mm256_fmadd_ps(d0, d0, a0);
+      a1 = _mm256_fmadd_ps(d1, d1, a1);
+      a2 = _mm256_fmadd_ps(d2, d2, a2);
+      a3 = _mm256_fmadd_ps(d3, d3, a3);
+    }
+    __m256 acc[4] = {a0, a1, a2, a3};
+    for (int r = 0; r < 4; ++r) {
+      __m128 lo = _mm256_castps256_ps128(acc[r]);
+      __m128 hi = _mm256_extractf128_ps(acc[r], 1);
+      __m128 s4 = _mm_add_ps(lo, hi);
+      s4 = _mm_hadd_ps(s4, s4);
+      s4 = _mm_hadd_ps(s4, s4);
+      float sum = _mm_cvtss_f32(s4);
+      const float* row = base + (i + r) * dims;
+      for (int64_t dd = d; dd < dims; ++dd) {
+        const float diff = row[dd] - q[dd];
+        sum += diff * diff;
+      }
+      out[i + r] = std::sqrt(sum);
+    }
+  }
+  for (; i < n; ++i) {
+    out[i] = static_cast<float>(l2_avx2(base + i * dims, q, dims));
+  }
+}
+#endif
+
+}  // namespace
+
+void l2_batch(const float* base, const float* q, const int64_t n, const int64_t dims, float* out) {
+  static const bool have_avx2 = []() -> bool {
+#if defined(MV_X86)
+    return __builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma");
+#else
+    return false;
+#endif
+  }();
+#if defined(MV_X86)
+  if (have_avx2) {
+    l2_batch_avx2(base, q, n, dims, out);
+    return;
+  }
+#else
+  (void)have_avx2;
+#endif
+  l2_batch_scalar(base, q, n, dims, out);
+}
+
+}  // namespace mv
