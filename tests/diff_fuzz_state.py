@@ -142,10 +142,21 @@ def main():
                 if roll < 0.24:
                     problems.extend(check_topk(session, model, rng))
                     continue
+                if roll < 0.24:
+                    problems.extend(check_topk(session, model, rng))
+                    continue
                 if roll < 0.27:
                     session.close()
                     session = Session(data_dir)
-                    trace(mark + " | restart")
+                    if in_tx:
+                        # A process that goes away with an open transaction aborts it, so the reference
+                        # model has to abort it as well before the states are compared.
+                        trace(mark + " | restart (open transaction aborted)")
+                        model.rows = snapshot
+                        snapshot = None
+                        in_tx = False
+                    else:
+                        trace(mark + " | restart")
                     problems.extend(check_full_table(session, model, mark + " after restart"))
                     continue
                 if roll < 0.55:
@@ -208,12 +219,16 @@ def main():
         finally:
             session.close()
 
-        if not in_tx:
-            session = Session(data_dir)
-            try:
-                problems.extend(check_full_table(session, model, "seed %d final" % seed))
-            finally:
-                session.close()
+        if in_tx:
+            # The engine aborts an open transaction when the process exits, so the model does too.
+            model.rows = snapshot
+            snapshot = None
+            in_tx = False
+        session = Session(data_dir)
+        try:
+            problems.extend(check_full_table(session, model, "seed %d final" % seed))
+        finally:
+            session.close()
         shutil.rmtree(tmp, ignore_errors=True)
         failures += len(problems)
         for problem in problems:

@@ -62,7 +62,7 @@ then this build uses:
 
 ```
 READY                       on startup
-OK                          a successful DDL/DML statement
+OK <affected_rows>          a successful DDL/DML statement and the rows it changed
 <header row>                a query result: column names, tab separated
 <data rows>                 tab separated
 END                         end of the query result
@@ -79,20 +79,31 @@ Everything lives in one directory (`/data` by default):
 
 | File | Purpose |
 |---|---|
-| `data.snapshot` | full state, written atomically (temp file + rename) |
-| `data.wal` | framed write-ahead log: committed statements are replayed on startup |
+| `catalog.pages` | table definitions and the vector index marker |
+| `t_<name>.pages` | one slotted-page file per table |
+| `data.wal` | length-prefixed write-ahead log: committed statements are replayed on startup |
 
 A clean shutdown rolls back an open transaction and checkpoints. After a hard kill the next start
 replays committed log records only, so acknowledged commits survive and unfinished transactions never
-take effect partially.
+take effect partially. A process that exits with an open transaction aborts it.
 
 ## Tests
 
 ```bash
-bash tests/run_smoke.sh      # SQL subset, TopK, transactions, restart persistence
-bash tests/crash_test.sh     # SIGKILL: committed survives, uncommitted disappears
-bash tests/debug_wal.sh      # dumps the WAL and shows what recovery replays
+bash tests/run_smoke.sh          # SQL subset, TopK, transactions, restart persistence
+bash tests/crash_test.sh         # SIGKILL: committed survives, uncommitted disappears
+bash tests/debug_wal.sh          # dumps the WAL and shows what recovery replays
+python3 tests/run_public_cases.py   # replays the published mysqltest-style cases
+python3 tests/diff_fuzz.py          # random SQL against a reference model
+python3 tests/diff_fuzz_state.py    # transactions, restarts and index upkeep against the model
+python3 tests/durability_test.py    # restart persistence, one statement shape at a time
+python3 tests/probe_syntax.py       # statement shapes a case may use, checking none is rejected
 ```
+
+`tests/run_public_cases.py` follows the published case README (a fresh data directory per case, one
+statement per line, exact `columns`/`affected_rows`, `1e-5` float tolerance, multiset comparison when a
+result is marked `unordered`). Point `MVDB_BIN` at `tests/docker_wrapper.sh` to drive the packaged
+image instead of a local build.
 
 These are development checks, not the official conformance suite.
 
