@@ -9,4 +9,11 @@
 *.hpp filter=codeformat
 *.i filter=codeformat
 *.ic filter=codeformat
-*.js filter=codeformat
+*.js filter=codeformat# Extra-round sources must reach the Linux build with LF line ends regardless of the authoring host.
+Dockerfile text eol=lf
+*.sh text eol=lf
+src/** text eol=lf
+tests/** text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+CMakeLists.txt text eol=lf
