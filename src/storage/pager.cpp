@@ -90,6 +90,23 @@ Err Pager::write_back(Frame* f) {
 }
 
 Pager::Frame* Pager::pick_victim(Err* err) {
+  // Grow into the pool before evicting anything: the pool is the point of the design, and evicting a
+  // resident page while free frames remain would turn it into a one-page cache and write pages back
+  // long before the checkpoint that makes them durable on purpose.
+  if (!free_frames_.empty()) {
+    Frame* f = free_frames_.back();
+    free_frames_.pop_back();
+    return f;
+  }
+  if (static_cast<int64_t>(frames_.size()) < pool_pages_) {
+    Frame* f = new Frame();
+    f->data = static_cast<char*>(std::malloc(kPageSize));
+    if (f->data == nullptr) {
+      *err = Err::IoError;
+      return nullptr;
+    }
+    return f;
+  }
   Frame* victim = nullptr;
   uint64_t best = UINT64_MAX;
   for (auto& kv : frames_) {
@@ -100,20 +117,13 @@ Pager::Frame* Pager::pick_victim(Err* err) {
     }
   }
   if (victim == nullptr) {
-    // Nothing resident yet: take a free frame, or create one if the pool has not reached its bound.
-    if (!free_frames_.empty()) {
-      victim = free_frames_.back();
-      free_frames_.pop_back();
-    } else {
-      Frame* f = new Frame();
-      f->data = static_cast<char*>(std::malloc(kPageSize));
-      if (f->data == nullptr) {
-        *err = Err::IoError;
-        return nullptr;
-      }
-      victim = f;
+    Frame* f = new Frame();
+    f->data = static_cast<char*>(std::malloc(kPageSize));
+    if (f->data == nullptr) {
+      *err = Err::IoError;
+      return nullptr;
     }
-    return victim;
+    return f;
   }
   if (write_back(victim) != Err::Ok) {
     *err = Err::IoError;

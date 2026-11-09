@@ -90,6 +90,8 @@ class Database {
   std::unordered_map<std::string, Table> tables_;
 
   bool in_txn_ = false;
+  // Set when the open transaction contains DDL, so COMMIT writes the catalog.
+  bool txn_ddl_ = false;
   std::vector<UndoRow> undo_rows_;
   std::vector<UndoDdl> undo_ddl_;
   std::vector<std::string> txn_log_;

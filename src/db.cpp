@@ -112,7 +112,8 @@ Err Database::open(const std::string& data_dir) {
 
   wal_fd_ = ::open(wal_path_.c_str(), O_CREAT | O_RDWR | O_APPEND, 0644);
   if (wal_fd_ < 0) return Err::IoError;
-  return replay_wal();
+  const Err rc = replay_wal();
+  return rc;
 }
 
 Err Database::close() {
@@ -381,6 +382,7 @@ Result Database::execute(const std::string& sql_text) {
       in_txn_ = true;
       undo_clear();
       txn_log_.clear();
+      txn_ddl_ = false;
       return res;
     case StmtKind::Commit:
       if (in_txn_) {
@@ -392,6 +394,12 @@ Result Database::execute(const std::string& sql_text) {
         in_txn_ = false;
         undo_clear();
         dirty_ = true;
+        // A committed table definition must survive a crash, not only the next checkpoint.
+        if (txn_ddl_ && save_catalog() != Err::Ok) {
+          res.err = Err::IoError;
+          return res;
+        }
+        txn_ddl_ = false;
       }
       return res;
     case StmtKind::Rollback:
@@ -399,6 +407,7 @@ Result Database::execute(const std::string& sql_text) {
         (void)undo_apply_from(0, 0);
         txn_log_.clear();
         in_txn_ = false;
+        txn_ddl_ = false;
         dirty_ = true;
       }
       return res;
@@ -413,13 +422,24 @@ Result Database::execute(const std::string& sql_text) {
     (void)undo_apply_from(row_mark, ddl_mark);
     return res;
   }
+  const bool is_ddl = (st.kind == StmtKind::CreateTable || st.kind == StmtKind::CreateIndex);
+  if (is_ddl) txn_ddl_ = true;
   if (st.kind != StmtKind::Select) {
     dirty_ = true;
     if (in_txn_) {
       txn_log_.push_back(sql);
-    } else if (wal_append(sql) != Err::Ok || wal_commit() != Err::Ok) {
-      res.err = Err::IoError;
-      return res;
+    } else {
+      if (wal_append(sql) != Err::Ok || wal_commit() != Err::Ok) {
+        res.err = Err::IoError;
+        return res;
+      }
+      // An auto-committed CREATE TABLE must be in the catalog before the statement is acknowledged,
+      // otherwise a crash loses the definition while the page file may already hold rows for it.
+      if (is_ddl && save_catalog() != Err::Ok) {
+        res.err = Err::IoError;
+        return res;
+      }
+      txn_ddl_ = false;
     }
   }
   return res;
