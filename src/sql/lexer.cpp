@@ -1,6 +1,7 @@
 #include "sql/lexer.h"
 
 #include <cctype>
+#include <cerrno>
 #include <cstdlib>
 #include <cstring>
 
@@ -71,7 +72,13 @@ bool tokenize(const std::string& sql, std::vector<Token>* out, std::string* err)
         t.f = std::strtod(t.text.c_str(), nullptr);
       } else {
         t.kind = Tok::Integer;
+        errno = 0;
         t.i = std::strtoll(t.text.c_str(), nullptr, 10);
+        if (errno == ERANGE) {
+          // Silently clamping would store a value the statement never asked for.
+          *err = "integer literal out of range: " + t.text;
+          return false;
+        }
       }
       i = j;
     } else if (std::isalpha(c) || c == '_' || c >= 0x80) {
@@ -97,7 +104,28 @@ bool tokenize(const std::string& sql, std::vector<Token>* out, std::string* err)
           break;
         }
         if (sql[j] == '\\' && j + 1 < n) {
-          payload.push_back(sql[j + 1]);
+          // Known escapes follow MySQL; an unknown one keeps its backslash so the stored value is what the
+          // statement wrote instead of something else.
+          const char escaped = sql[j + 1];
+          switch (escaped) {
+            case '0': payload.push_back('\0'); break;
+            case 'b': payload.push_back('\b'); break;
+            case 'n': payload.push_back('\n'); break;
+            case 'r': payload.push_back('\r'); break;
+            case 't': payload.push_back('\t'); break;
+            case 'Z': payload.push_back('\x1a'); break;
+            case '\\':
+            case '\'':
+            case '"':
+            case '%':
+            case '_':
+              payload.push_back(escaped);
+              break;
+            default:
+              payload.push_back('\\');
+              payload.push_back(escaped);
+              break;
+          }
           j += 2;
           continue;
         }
