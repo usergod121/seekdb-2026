@@ -39,7 +39,10 @@ class Database {
 
   Err open(const std::string& data_dir);
   Err close();
+  // Runs whatever the request carries: one statement, or several separated by semicolons.
   Result execute(const std::string& sql);
+  // One single statement (the internal entry point used by replay).
+  Result execute_one(const std::string& sql);
 
   // Path of a table's page file; `exec` needs it when a table is created.
   std::string table_pages_path(const std::string& table) const;

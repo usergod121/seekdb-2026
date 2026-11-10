@@ -1,4 +1,5 @@
 #include "db.h"
+#include "protocol/splitter.h"
 
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -360,6 +361,47 @@ Table* Database::find_table(const std::string& name) {
 }
 
 Result Database::execute(const std::string& sql_text) {
+  // The transport carries one request, but the request may hold a whole transaction. Statements are split
+  // on semicolons that are not inside a string literal or a comment, run in order, and reported once: the
+  // first failure wins, an affected-row count is summed, and a query result is the last one produced.
+  mv::Splitter splitter;
+  std::vector<std::string> statements;
+  splitter.feed(sql_text + "\n", &statements);
+  const std::string& tail = splitter.pending();
+  bool tail_blank = true;
+  for (const char c : tail) {
+    if (c != ' ' && c != '\t' && c != '\r' && c != '\n') {
+      tail_blank = false;
+      break;
+    }
+  }
+  if (!tail_blank) statements.push_back(tail);
+  if (statements.size() <= 1) {
+    return execute_one(statements.empty() ? sql_text : statements.front());
+  }
+  Result combined;
+  for (const std::string& one : statements) {
+    bool blank = true;
+    for (const char c : one) {
+      if (c != ' ' && c != '\t' && c != '\r' && c != '\n') {
+        blank = false;
+        break;
+      }
+    }
+    if (blank) continue;
+    const Result r = execute_one(one);
+    if (r.err != Err::Ok) return r;
+    combined.affected += r.affected;
+    if (r.is_query) {
+      combined.is_query = true;
+      combined.col_names = r.col_names;
+      combined.rows = r.rows;
+    }
+  }
+  return combined;
+}
+
+Result Database::execute_one(const std::string& sql_text) {
   Result res;
   size_t b = 0;
   size_t e = sql_text.size();
