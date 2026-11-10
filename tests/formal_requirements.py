@@ -8,6 +8,7 @@
   * data that does not fit the memory budget is still queried correctly (paged path);
   * TopK over that paged data filters first and breaks ties on the primary key.
 """
+import json
 import os
 import random
 import shutil
@@ -26,12 +27,24 @@ def f32(x):
     return struct.unpack("f", struct.pack("f", x))[0]
 
 
+def _cell(value):
+    """Renders one typed JSON cell the way the assertions below expect to read it."""
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    if isinstance(value, (int, float)):
+        return repr(value) if isinstance(value, float) else str(value)
+    if isinstance(value, list):
+        return "[" + ",".join(_cell(v) for v in value) + "]"
+    return str(value)
+
+
 class Session:
     def __init__(self, data_dir, env=None):
         self.proc = subprocess.Popen([BIN, "--data-dir", data_dir], stdin=subprocess.PIPE,
                                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0,
                                      env=env)
         self.buf = b""
+        self.seq = 0
         self.line()
 
     def line(self):
@@ -44,28 +57,30 @@ class Session:
         return line.decode("utf-8", "replace").rstrip("\r")
 
     def run(self, sql):
-        os.write(self.proc.stdin.fileno(), (sql + "\n").encode("utf-8"))
-        out = {"kind": None, "columns": None, "rows": [], "affected": 0, "code": ""}
-        while True:
-            line = self.line()
-            if line == "READY":
-                continue
-            if line.startswith("OK"):
-                out["kind"] = "ok"
-                parts = line.split(" ", 1)
-                out["affected"] = int(parts[1]) if len(parts) > 1 and parts[1] else 0
-                return out
-            if line.startswith("ERROR"):
-                out["kind"] = "error"
-                out["code"] = line.split(" ")[1] if len(line.split(" ")) > 1 else ""
-                return out
-            if line == "END":
+        self.seq += 1
+        request = {"id": self.seq, "op": "execute", "sql": sql, "search_mode": "exact"}
+        os.write(self.proc.stdin.fileno(), (json.dumps(request) + "\n").encode())
+        raw = self.line()
+        try:
+            reply = json.loads(raw)
+        except Exception:
+            raise RuntimeError("non-JSON reply to %r: %r" % (sql, raw[:200]))
+        # The transport is JSON Lines (STDIO_PROTOCOL.md); the assertions below keep the older tabular
+        # shape so the checks read the same way they did before the protocol switch.
+        out = {"kind": None, "columns": None, "rows": [], "affected": 0, "code": "", "raw": reply}
+        if reply.get("ok") is True:
+            if "columns" in reply:
                 out["kind"] = "rows"
-                return out
-            if out["columns"] is None:
-                out["columns"] = [] if line == "" else line.split("\t")
+                out["columns"] = list(reply.get("columns") or [])
+                out["rows"] = [["" if c is None else _cell(c) for c in row]
+                               for row in (reply.get("rows") or [])]
             else:
-                out["rows"].append([] if line == "" else line.split("\t"))
+                out["kind"] = "ok"
+                out["affected"] = int(reply.get("affected_rows") or 0)
+        else:
+            out["kind"] = "error"
+            out["code"] = str((reply.get("error") or {}).get("code") or "")
+        return out
 
     def kill(self):
         self.proc.send_signal(signal.SIGKILL)
@@ -73,7 +88,9 @@ class Session:
 
     def close(self):
         try:
-            self.proc.stdin.close()
+            os.write(self.proc.stdin.fileno(),
+                     (json.dumps({"op": "shutdown"}) + "\n").encode())
+            self.line()
         except Exception:
             pass
         try:

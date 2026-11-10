@@ -1,7 +1,9 @@
 // Statement execution: DDL, INSERT, SELECT (including vector TopK), UPDATE and DELETE.
 #include <algorithm>
+#include <cerrno>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #include <charconv>
@@ -120,6 +122,11 @@ bool parse_plain_decimal(const char* p, const char* end, const char** after, flo
 // tokenizer would allocate a token per number, which would dominate the query path otherwise.
 bool vector_from_expr(const Expr& e, std::vector<float>* out) {
   if (e.kind == ExprKind::VectorLit) {
+    // 2.1: every element must be a finite float32 - a bare list can hold 1e39 or 1e400 as well, and an
+    // infinite element would make every distance infinite instead of being rejected.
+    for (float v : e.vec) {
+      if (!std::isfinite(v)) return false;
+    }
     *out = e.vec;
     return true;
   }
@@ -164,6 +171,10 @@ bool vector_from_expr(const Expr& e, std::vector<float>* out) {
         p = next;
       }
     }
+    // 2.1: a value that overflows float32 (1e39) or is not a number at all (nan, inf) is not a valid
+    // element - the quoted form is the spelling the task package uses, so it needs the same rejection
+    // the bare list gets, including on the query side where the element never reaches a column check.
+    if (!std::isfinite(v)) return false;
     out->push_back(v);
   }
   return false;
@@ -357,9 +368,12 @@ Err value_from_expr(const Expr& e, const Column& col, std::vector<float>* vec_ou
         return Err::Ok;
       }
       if (e.kind == ExprKind::StrLit) {
+        // A quoted integer that does not fit in BIGINT must be rejected: strtoll silently clamps to
+        // LLONG_MAX / LLONG_MIN and reports ERANGE instead, which would store a wrong value.
+        errno = 0;
         char* endp = nullptr;
         const long long v = std::strtoll(e.s.c_str(), &endp, 10);
-        if (endp == nullptr || *endp != '\0') return Err::SyntaxError;
+        if (endp == nullptr || *endp != '\0' || errno == ERANGE) return Err::ValueOverflow;
         out->type = ColType::BigInt;
         out->i = static_cast<int64_t>(v);
         return Err::Ok;
@@ -513,6 +527,7 @@ Result Database::exec_insert(const Stmt& st, const bool replay) {
   if (st.insert_columns.empty()) {
     for (size_t i = 0; i < ncols; ++i) order.push_back(static_cast<int>(i));
   } else {
+    std::vector<char> seen(ncols, 0);
     for (const std::string& name : st.insert_columns) {
       const int c = t->find_column(name);
       if (c < 0) {
@@ -520,6 +535,14 @@ Result Database::exec_insert(const Stmt& st, const bool replay) {
         r.message = "unknown column " + name;
         return r;
       }
+      // A repeated target column would write one value twice and silently drop the other one
+      // ("INSERT INTO t (id, id, v) VALUES ..."); MySQL rejects the statement, so do we.
+      if (seen[static_cast<size_t>(c)] != 0) {
+        r.err = Err::SyntaxError;
+        r.message = "column specified twice: " + name;
+        return r;
+      }
+      seen[static_cast<size_t>(c)] = 1;
       order.push_back(c);
     }
     if (order.size() != ncols) {
