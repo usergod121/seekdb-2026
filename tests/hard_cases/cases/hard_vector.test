@@ -1,0 +1,13 @@
+CREATE TABLE v (id BIGINT PRIMARY KEY, grp VARCHAR(4), emb VECTOR(2))
+INSERT INTO v VALUES (10,'a','[0,0]'),(2,'a','[1,0]'),(7,'a','[1,0]'),(5,'b','[0,1]'),(1,'b','[0,0]'),(9,'c','[2,2]')
+SELECT id, L2_DISTANCE(emb,'[0,0]') AS d FROM v ORDER BY d
+SELECT id, L2_DISTANCE(emb,'[0,0]') AS d FROM v WHERE grp='a' ORDER BY d LIMIT 2
+--mode ann
+SELECT id FROM v WHERE grp='b' ORDER BY L2_DISTANCE(emb,'[0,1]') LIMIT 5
+--mode exact
+CREATE VECTOR INDEX idx ON v(emb)
+UPDATE v SET emb='[0,0]' WHERE id=9
+DELETE FROM v WHERE id=10
+--restart
+--mode ann
+SELECT id FROM v ORDER BY L2_DISTANCE(emb,'[0,0]') LIMIT 4

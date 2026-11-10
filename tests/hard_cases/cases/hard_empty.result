@@ -1,0 +1,54 @@
+[
+  {},
+  {
+    "columns": [
+      "id"
+    ],
+    "rows": []
+  },
+  {
+    "columns": [
+      "id",
+      "d"
+    ],
+    "rows": []
+  },
+  {
+    "affected_rows": 0
+  },
+  {
+    "affected_rows": 0
+  },
+  {
+    "affected_rows": 2
+  },
+  {
+    "columns": [
+      "id",
+      "d"
+    ],
+    "rows": [
+      [
+        1,
+        1.0
+      ],
+      [
+        2,
+        5.0
+      ]
+    ]
+  },
+  {
+    "columns": [
+      "id"
+    ],
+    "rows": [
+      [
+        2
+      ],
+      [
+        1
+      ]
+    ]
+  }
+]

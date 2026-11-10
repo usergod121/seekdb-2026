@@ -115,7 +115,7 @@ def check(expect, got, warnings, label):
         if got["kind"] != "ok":
             return ["expected an affected_rows result, got %s" % got["kind"]]
         if got["affected"] != expect["affected_rows"]:
-            fails.append("affected_rows %d != %d" % (got["affected"], expect["affected_rows"]))
+            fails.append("affected_rows %r != %r" % (got["affected"], expect["affected_rows"]))
     if "columns" in expect:
         if got["kind"] != "rows":
             return fails + ["expected a query result, got %s" % got["kind"]]

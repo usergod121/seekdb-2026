@@ -433,6 +433,9 @@ Err parse_statement(const std::string& sql, Stmt* out, std::string* err) {
   std::string lex_err;
   if (!tokenize(sql, &toks, &lex_err)) {
     if (err != nullptr) *err = lex_err;
+    // A literal that is well formed but does not fit the target type is a value range problem, not a
+    // syntax one: "INSERT ... VALUES (9223372036854775808)" parses fine and then has nowhere to go.
+    if (lex_err.find("out of range") != std::string::npos) return Err::ValueOverflow;
     return Err::SyntaxError;
   }
   Parser p(sql, std::move(toks), err);

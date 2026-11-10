@@ -7,8 +7,12 @@ for f in boundary_suite.py boundary_suite2.py adversarial_protocol.py probe_synt
   out=$(timeout 1200 python3 -u "tests/$f" 2>/dev/null | grep -E 'passed|problem' | tail -1)
   echo "${out:-no summary}"
 done
-# independent re-implementation of the case comparison (95 statements, restarts and ann mode included)
-printf '%-26s ' "run_official_cases.py"
+# harder siblings of the public cases, expectations computed by an independent Python model
+printf '%-26s ' "hard_cases (modelled)"
+timeout 300 python3 -u tests/gen_hard_cases.py >/dev/null 2>&1
+MVDB_CASES=/mnt/e/mvdb/tests/hard_cases timeout 900 python3 -u tests/run_official_cases.py 2>/dev/null | tail -1
+# independent re-implementation of the case comparison over the published package
+printf '%-26s ' "official_cases (local)"
 MVDB_CASES=/mnt/e/pw/round2/pkg2/mysqltest timeout 900 python3 -u tests/run_official_cases.py 2>/dev/null | tail -1
 echo -n "official protocol_check PASS count: "
 cd /mnt/e/pw/round2/pkg2 && ./run_local_check.sh 2>/dev/null | grep -cE ': PASS'

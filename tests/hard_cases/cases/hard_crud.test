@@ -1,0 +1,9 @@
+CREATE TABLE docs (id BIGINT PRIMARY KEY, grp VARCHAR(8), note VARCHAR(16))
+INSERT INTO docs VALUES (5,'b','five'),(1,'a','one'),(3,'b','three'),(2,'a','two'),(4,'c','four')
+SELECT id, note FROM docs ORDER BY id
+UPDATE docs SET note='UPD' WHERE grp='a'
+SELECT id, grp, note FROM docs ORDER BY id
+UPDATE docs SET grp='z' WHERE id>3 AND grp='b'
+DELETE FROM docs WHERE note='three'
+SELECT id FROM docs WHERE grp='z' ORDER BY id
+SELECT id, grp FROM docs ORDER BY id DESC LIMIT 2

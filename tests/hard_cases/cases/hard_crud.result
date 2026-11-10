@@ -1,0 +1,103 @@
+[
+  {},
+  {
+    "affected_rows": 5
+  },
+  {
+    "columns": [
+      "id",
+      "note"
+    ],
+    "rows": [
+      [
+        1,
+        "one"
+      ],
+      [
+        2,
+        "two"
+      ],
+      [
+        3,
+        "three"
+      ],
+      [
+        4,
+        "four"
+      ],
+      [
+        5,
+        "five"
+      ]
+    ]
+  },
+  {
+    "affected_rows": 2
+  },
+  {
+    "columns": [
+      "id",
+      "grp",
+      "note"
+    ],
+    "rows": [
+      [
+        1,
+        "a",
+        "UPD"
+      ],
+      [
+        2,
+        "a",
+        "UPD"
+      ],
+      [
+        3,
+        "b",
+        "three"
+      ],
+      [
+        4,
+        "c",
+        "four"
+      ],
+      [
+        5,
+        "b",
+        "five"
+      ]
+    ]
+  },
+  {
+    "affected_rows": 1
+  },
+  {
+    "affected_rows": 1
+  },
+  {
+    "columns": [
+      "id"
+    ],
+    "rows": [
+      [
+        5
+      ]
+    ]
+  },
+  {
+    "columns": [
+      "id",
+      "grp"
+    ],
+    "rows": [
+      [
+        5,
+        "z"
+      ],
+      [
+        4,
+        "c"
+      ]
+    ]
+  }
+]

@@ -1,0 +1,8 @@
+CREATE TABLE t (id BIGINT PRIMARY KEY, name VARCHAR(8), score BIGINT)
+INSERT INTO t VALUES (7,'bb',10),(2,'aa',10),(9,'aa',5),(4,'cc',10),(1,'bb',5),(6,'aa',10)
+SELECT id, name FROM t ORDER BY name
+SELECT id, name FROM t ORDER BY name DESC
+SELECT id, name, score FROM t ORDER BY score LIMIT 3
+SELECT id FROM t WHERE score>=10 ORDER BY score DESC, id ASC LIMIT 2
+SELECT id FROM t ORDER BY name LIMIT 0
+SELECT id FROM t WHERE name='zz' ORDER BY name

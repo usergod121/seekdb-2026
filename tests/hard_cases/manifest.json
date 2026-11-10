@@ -1,0 +1,55 @@
+{
+  "version": "hard-siblings-v1",
+  "scope": "modelled",
+  "cases": [
+    {
+      "id": "hard_crud",
+      "group": "hard",
+      "test": "cases/hard_crud.test",
+      "result": "cases/hard_crud.result",
+      "statements": 9
+    },
+    {
+      "id": "hard_order",
+      "group": "hard",
+      "test": "cases/hard_order.test",
+      "result": "cases/hard_order.result",
+      "statements": 8
+    },
+    {
+      "id": "hard_empty",
+      "group": "hard",
+      "test": "cases/hard_empty.test",
+      "result": "cases/hard_empty.result",
+      "statements": 8
+    },
+    {
+      "id": "hard_strings",
+      "group": "hard",
+      "test": "cases/hard_strings.test",
+      "result": "cases/hard_strings.result",
+      "statements": 5
+    },
+    {
+      "id": "hard_bigint",
+      "group": "hard",
+      "test": "cases/hard_bigint.test",
+      "result": "cases/hard_bigint.result",
+      "statements": 7
+    },
+    {
+      "id": "hard_vector",
+      "group": "hard",
+      "test": "cases/hard_vector.test",
+      "result": "cases/hard_vector.result",
+      "statements": 9
+    },
+    {
+      "id": "hard_tx",
+      "group": "hard",
+      "test": "cases/hard_tx.test",
+      "result": "cases/hard_tx.result",
+      "statements": 14
+    }
+  ]
+}

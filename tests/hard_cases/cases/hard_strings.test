@@ -1,0 +1,5 @@
+CREATE TABLE s (id BIGINT PRIMARY KEY, txt VARCHAR(12))
+INSERT INTO s VALUES (1,'a"b'),(2,'c''d'),(3,'e\\f'),(4,'g\th'),(5,'i\nj'),(6,'中文字'),(7,'😀😁'),(8,'éè'),(9,''),(10,'中文字符 10')
+SELECT id, txt FROM s ORDER BY id
+SELECT id FROM s WHERE txt > 'éè' ORDER BY txt
+SELECT id FROM s WHERE txt='' ORDER BY id
