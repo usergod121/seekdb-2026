@@ -130,14 +130,24 @@ bool vector_from_expr(const Expr& e, std::vector<float>* out) {
   if (p >= end || *p != '[') return false;
   ++p;
   out->clear();
-  while (p < end) {
-    while (p < end && (*p == ' ' || *p == '\t' || *p == ',')) ++p;
-    if (p < end && *p == ']') {
+  // The grammar is  '[' number (',' number)* ']'  with optional blanks around tokens: a missing separator,
+  // an empty element or a trailing comma is a malformed literal, not a vector.
+  bool first = true;
+  for (;;) {
+    while (p < end && (*p == ' ' || *p == '\t')) ++p;
+    if (p >= end) return false;
+    if (*p == ']') {
       ++p;
       while (p < end && (*p == ' ' || *p == '\t')) ++p;
       return p == end;
     }
-    if (p >= end) return false;
+    if (!first) {
+      if (*p != ',') return false;
+      ++p;
+      while (p < end && (*p == ' ' || *p == '\t')) ++p;
+      if (p >= end) return false;
+    }
+    first = false;
     float v = 0.0f;
     const char* after = p;
     if (parse_plain_decimal(p, end, &after, &v)) {
@@ -784,6 +794,17 @@ Result Database::exec_select(const Stmt& st) {
   struct L2Spec {
     std::vector<float> q;
   };
+  // A vector column has no ordering of its own; refusing is better than silently ordering by its text.
+  for (size_t i = 0; i < st.order_by.size(); ++i) {
+    const Expr& key = *order_exprs[i];
+    if (key.kind == ExprKind::Column && t->vec_col >= 0 &&
+        t->find_column(key.name) == static_cast<int>(t->vec_col)) {
+      r.err = Err::NotSupported;
+      r.message = "ORDER BY a vector column is not supported";
+      return r;
+    }
+  }
+
   std::vector<L2Spec> order_l2(st.order_by.size());
   std::vector<L2Spec> proj_l2(st.projections.size());
   // The same literal commonly appears twice in one statement (once in the projection, once in ORDER
