@@ -24,9 +24,15 @@ class Session:
         self.proc = subprocess.Popen([BIN, "--data-dir", data_dir], stdin=subprocess.PIPE,
                                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
         self.buf = b""
+        self.seq = 0
+        self.mode = "exact"
         line = self._line()
-        if line != "READY":
-            raise RuntimeError("expected READY, got %r" % line)
+        try:
+            hello = json.loads(line)
+        except Exception:
+            raise RuntimeError("handshake is not JSON: %r" % line[:120])
+        if hello.get("type") != "ready":
+            raise RuntimeError("expected a ready handshake, got %r" % line[:120])
 
     def _line(self):
         while b"\n" not in self.buf:
@@ -38,34 +44,32 @@ class Session:
         return line.decode("utf-8", "replace").rstrip("\r")
 
     def run(self, sql):
-        os.write(self.proc.stdin.fileno(), (sql + "\n").encode("utf-8"))
+        self.seq += 1
+        request = {"id": self.seq, "op": "execute", "sql": sql, "search_mode": self.mode}
+        os.write(self.proc.stdin.fileno(), (json.dumps(request) + "\n").encode("utf-8"))
+        reply = json.loads(self._line())
         out = {"kind": None, "columns": None, "rows": [], "affected": None, "code": None, "text": None}
-        while True:
-            line = self._line()
-            if line == "READY":
-                continue
-            if line.startswith("OK"):
-                parts = line.split(" ", 1)
-                out["kind"] = "ok"
-                out["affected"] = int(parts[1]) if len(parts) > 1 and parts[1].strip() else 0
-                return out
-            if line.startswith("ERROR"):
-                parts = line.split(" ", 2)
-                out["kind"] = "error"
-                out["code"] = parts[1] if len(parts) > 1 else ""
-                out["text"] = parts[2] if len(parts) > 2 else ""
-                return out
-            if line == "END":
+        if reply.get("ok") is True:
+            if "columns" in reply:
                 out["kind"] = "rows"
-                return out
-            if out["columns"] is None:
-                out["columns"] = [] if line == "" else line.split("\t")
+                out["columns"] = list(reply.get("columns") or [])
+                out["rows"] = list(reply.get("rows") or [])
             else:
-                out["rows"].append([] if line == "" else line.split("\t"))
+                out["kind"] = "ok"
+                out["affected"] = int(reply.get("affected_rows") or 0)
+        else:
+            err = reply.get("error") or {}
+            out["kind"] = "error"
+            out["code"] = err.get("code") or ""
+            out["text"] = err.get("message") or ""
+        return out
 
     def close(self):
         try:
-            self.proc.stdin.close()
+            self.seq += 1
+            os.write(self.proc.stdin.fileno(),
+                     (json.dumps({"id": self.seq, "op": "shutdown"}) + "\n").encode("utf-8"))
+            self._line()
         except Exception:
             pass
         try:
@@ -75,23 +79,18 @@ class Session:
 
 
 def cell_equal(expected, actual):
+    if expected is None:
+        return actual is None
     if isinstance(expected, bool):
-        return str(expected).lower() == actual.lower()
-    if isinstance(expected, int):
-        try:
-            return int(actual) == expected
-        except ValueError:
-            try:
-                return abs(float(actual) - expected) <= TOL * max(1.0, abs(expected))
-            except ValueError:
-                return False
-    if isinstance(expected, float):
-        try:
-            got = float(actual)
-        except ValueError:
+        return isinstance(actual, bool) and actual == expected
+    if isinstance(expected, (int, float)):
+        if not isinstance(actual, (int, float)) or isinstance(actual, bool):
             return False
-        diff = abs(got - expected)
-        return diff <= TOL or diff <= TOL * abs(expected)
+        diff = abs(float(actual) - float(expected))
+        return diff <= TOL or diff <= TOL * abs(float(expected))
+    if isinstance(expected, list):
+        return (isinstance(actual, list) and len(expected) == len(actual)
+                and all(cell_equal(e, a) for e, a in zip(expected, actual)))
     return expected == actual
 
 
@@ -172,7 +171,10 @@ def run_case(case, keep_dir=None):
                     session = Session(data_dir)
                     restarts += 1
                 elif directive == "--mode":
-                    modes.append(line.split()[1] if len(line.split()) > 1 else "")
+                    mode = line.split()[1] if len(line.split()) > 1 else ""
+                    modes.append(mode)
+                    if mode in ("exact", "ann"):
+                        session.mode = mode
                 else:
                     warnings.append("unknown directive %r" % line)
                 continue
