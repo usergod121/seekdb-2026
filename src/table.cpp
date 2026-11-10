@@ -45,6 +45,35 @@ struct Cursor {
 
 }  // namespace
 
+// How much memory the row/vector cache may use. The container's own limit decides it: the columnar
+// cache is what makes a scan fast, so a 2 GiB judge container should be allowed well over the 64 MiB
+// floor - but never so much that a large table can push the process into its memory limit. Kept at
+// an eighth of the cgroup limit, which leaves room for the page pool, the decoded rows and the
+// growth the loader needs.
+static int64_t default_cache_budget_bytes() {
+  constexpr int64_t kFloor = 64LL << 20;
+  constexpr int64_t kCeiling = 512LL << 20;
+  int64_t limit = 0;
+  for (const char* path : {"/sys/fs/cgroup/memory.max",
+                           "/sys/fs/cgroup/memory/memory.limit_in_bytes"}) {
+    if (FILE* f = std::fopen(path, "re")) {
+      char buf[64] = {0};
+      if (std::fscanf(f, "%63s", buf) == 1 && std::strcmp(buf, "max") != 0) {
+        const long long value = std::atoll(buf);
+        // cgroup v1 reports an absurd "no limit" number near the top of the long range.
+        if (value > 0 && value < (1LL << 60)) limit = value;
+      }
+      std::fclose(f);
+    }
+    if (limit > 0) break;
+  }
+  if (limit <= 0) return kFloor;
+  int64_t budget = limit / 8;
+  if (budget < kFloor) budget = kFloor;
+  if (budget > kCeiling) budget = kCeiling;
+  return budget;
+}
+
 int Table::find_column(const std::string& name) const {
   for (size_t i = 0; i < columns.size(); ++i) {
     if (equals_ci(columns[i].name, name.c_str())) return static_cast<int>(i);
@@ -53,6 +82,7 @@ int Table::find_column(const std::string& name) const {
 }
 
 Err Table::open_pages(const std::string& path, const int64_t pool_pages) {
+  cache_budget_bytes = default_cache_budget_bytes();
   if (const char* budget = ::getenv("MVDB_CACHE_BUDGET_BYTES")) {
     const long long value = std::atoll(budget);
     if (value > 0) cache_budget_bytes = value;
@@ -159,7 +189,9 @@ Err Table::rebuild_pk_index() {
   pk_index.reserve(rids.size());
   Row row;
   for (const Rid& rid : rids) {
-    if (fetch_at(rid, &row) != Err::Ok) continue;
+    // An unreadable row must not be dropped from the index: a missing entry makes the key look free
+    // and lets a duplicate through, so the failure is reported instead.
+    if (fetch_at(rid, &row) != Err::Ok) return Err::IoError;
     pk_index[row.vals[static_cast<size_t>(pk_col)].i] = rid;
   }
   live_rows = static_cast<int64_t>(rids.size());
@@ -200,7 +232,12 @@ Err Table::build_cache() {
   }
   Row row;
   for (const Rid& rid : rids) {
-    if (fetch_at(rid, &row) != Err::Ok) continue;
+    // Skipping an unreadable row here would make the cached view disagree with the paged path (a
+    // missing row, a wrong TopK answer), so the build fails and callers use the paged path instead.
+    if (fetch_at(rid, &row) != Err::Ok) {
+      cache_valid = false;
+      return Err::IoError;
+    }
     cache_pks.push_back(row.vals[static_cast<size_t>(pk_col)].i);
     for (size_t col = 0; col < columns.size(); ++col) {
       if (columns[col].type == ColType::BigInt) {

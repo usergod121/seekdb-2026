@@ -451,11 +451,14 @@ Result Database::execute_one(const std::string& sql_text) {
       return res;
     case StmtKind::Commit:
       if (in_txn_) {
+        // A transaction that changed nothing has nothing to make durable: writing the commit record
+        // and forcing the log to disk costs a full device flush (milliseconds) for no promise.
+        const bool wrote = !txn_log_.empty();
         for (const std::string& s : txn_log_) {
           if (wal_append(s) != Err::Ok) { res.err = Err::IoError; return res; }
         }
         txn_log_.clear();
-        if (wal_commit() != Err::Ok) { res.err = Err::IoError; return res; }
+        if (wrote && wal_commit() != Err::Ok) { res.err = Err::IoError; return res; }
         in_txn_ = false;
         undo_clear();
         dirty_ = true;
