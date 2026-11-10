@@ -387,20 +387,6 @@ Err value_from_expr(const Expr& e, const Column& col, std::vector<float>* vec_ou
   return Err::NotSupported;
 }
 
-std::string fmt_double(const double v) {
-  char buf[64];
-  std::snprintf(buf, sizeof(buf), "%.6f", v);
-  std::string s(buf);
-  while (s.size() > 1 && s.back() == '0') s.pop_back();
-  if (!s.empty() && s.back() == '.') s.pop_back();
-  return s;
-}
-
-std::string fmt_value(const Value& v) {
-  if (v.type == ColType::BigInt) return std::to_string(v.i);
-  return v.s;
-}
-
 }  // namespace
 
 // ---- CREATE ---------------------------------------------------------------
@@ -858,28 +844,26 @@ Result Database::exec_select(const Stmt& st) {
   std::string perr;
   Row paged_row;
 
-  // Renders a vector as the literal form the results compare against.
-  auto render_vec = [&](const float* vec) {
-    std::string s = "[";
-    for (int64_t d = 0; d < dims; ++d) {
-      if (d != 0) s.push_back(',');
-      char buf[32];
-      std::snprintf(buf, sizeof(buf), "%.6g", static_cast<double>(vec[d]));
-      s += buf;
-    }
-    s.push_back(']');
-    return s;
+  // A vector cell holds the stored float32 values themselves; the transport prints them as an array.
+  auto vec_cell = [&](const float* vec) {
+    std::vector<float> values;
+    values.reserve(static_cast<size_t>(dims > 0 ? dims : 0));
+    for (int64_t d = 0; d < dims; ++d) values.push_back(vec[d]);
+    return Cell::of_vec(std::move(values));
   };
 
-  // Builds one output line for a row.
-  auto project = [&](const Row& row, const float* vec, std::vector<std::string>* line) -> bool {
+  // Builds one output row. Cell types follow the column types, so the wire layer can serialise without
+  // guessing (an integer stays a JSON number, a VARCHAR a JSON string).
+  auto project = [&](const Row& row, const float* vec, std::vector<Cell>* line) -> bool {
     Ctx ctx{t, &row, vec};
     if (st.projections.empty()) {
       for (size_t col = 0; col < t->columns.size(); ++col) {
         if (static_cast<int64_t>(col) == t->vec_col) {
-          line->push_back(render_vec(vec));
+          line->push_back(vec_cell(vec));
+        } else if (row.vals[col].type == ColType::BigInt) {
+          line->push_back(Cell::of_int(row.vals[col].i));
         } else {
-          line->push_back(fmt_value(row.vals[col]));
+          line->push_back(Cell::of_str(row.vals[col].s));
         }
       }
       return true;
@@ -887,9 +871,9 @@ Result Database::exec_select(const Stmt& st) {
     for (size_t i = 0; i < st.projections.size(); ++i) {
       const Expr& e = *st.projections[i];
       if (proj_vec[i]) {
-        line->push_back(render_vec(vec));
+        line->push_back(vec_cell(vec));
       } else if (!proj_l2[i].q.empty()) {
-        line->push_back(fmt_double(l2_distance(vec, proj_l2[i].q.data(), dims)));
+        line->push_back(Cell::of_double(l2_distance(vec, proj_l2[i].q.data(), dims)));
       } else {
         Value v;
         if (!eval_scalar(ctx, e, &v, nullptr, &perr)) {
@@ -897,7 +881,11 @@ Result Database::exec_select(const Stmt& st) {
           r.message = perr;
           return false;
         }
-        line->push_back(fmt_value(v));
+        if (v.type == ColType::BigInt) {
+          line->push_back(Cell::of_int(v.i));
+        } else {
+          line->push_back(Cell::of_str(v.s));
+        }
       }
     }
     return true;
@@ -934,7 +922,7 @@ Result Database::exec_select(const Stmt& st) {
       r.rows.reserve(hits.size());
       for (const VecHit& hit : hits) {
         const size_t idx = static_cast<size_t>(hit.idx);
-        std::vector<std::string> line;
+        std::vector<Cell> line;
         if (!project(t->cache_rows[idx], t->cache_vec(static_cast<int64_t>(idx)), &line)) return r;
         r.rows.push_back(std::move(line));
       }
@@ -1028,7 +1016,7 @@ Result Database::exec_select(const Stmt& st) {
     r.rows.reserve(heap.size());
     for (const HeapItem& item : heap) {
       const Row& row = t->cache_rows[static_cast<size_t>(item.cache_idx)];
-      std::vector<std::string> line;
+      std::vector<Cell> line;
       if (!project(row, t->cache_vec(item.cache_idx), &line)) return r;
       r.rows.push_back(std::move(line));
     }
@@ -1131,7 +1119,7 @@ Result Database::exec_select(const Stmt& st) {
       rowp = &paged_row;
       vecp = dims > 0 ? paged_row.vec.data() : nullptr;
     }
-    std::vector<std::string> line;
+    std::vector<Cell> line;
     if (!project(*rowp, vecp, &line)) return r;
     r.rows.push_back(std::move(line));
   }

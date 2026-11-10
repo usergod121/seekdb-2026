@@ -82,6 +82,41 @@ struct Value {
   int64_t vec_off = -1;      // offset into the owning table's float arena, -1 when NULL
 };
 
+// One value of a result row, kept typed until the transport writes it: the JSON protocol needs an
+// integer to stay an integer and a string to stay a string.
+struct Cell {
+  enum class Kind { Null, Int, Double, Str, Vec } kind = Kind::Null;
+  int64_t i = 0;
+  double d = 0.0;
+  std::string s;
+  std::vector<float> v;
+
+  static Cell of_int(const int64_t value) {
+    Cell cell;
+    cell.kind = Kind::Int;
+    cell.i = value;
+    return cell;
+  }
+  static Cell of_double(const double value) {
+    Cell cell;
+    cell.kind = Kind::Double;
+    cell.d = value;
+    return cell;
+  }
+  static Cell of_str(std::string value) {
+    Cell cell;
+    cell.kind = Kind::Str;
+    cell.s = std::move(value);
+    return cell;
+  }
+  static Cell of_vec(std::vector<float> value) {
+    Cell cell;
+    cell.kind = Kind::Vec;
+    cell.v = std::move(value);
+    return cell;
+  }
+};
+
 struct KeyHash {
   size_t operator()(const int64_t v) const {
     uint64_t x = static_cast<uint64_t>(v);

@@ -1,50 +1,20 @@
-// Entry point: open the database, announce readiness, then serve statements read from stdin and write
-// results to stdout. Logs go to stderr. No network listener is opened.
+// Entry point: open the database, announce readiness with the handshake the task package defines, then
+// serve JSON-lines requests from stdin and answer one JSON line per request on stdout. Logs go to stderr.
+#include <cerrno>
 #include <csignal>
 #include <cstdio>
 #include <cstring>
 #include <string>
-#include <vector>
 
 #include <unistd.h>
 
 #include "db.h"
-#include "protocol/splitter.h"
+#include "protocol/json.h"
 #include "protocol/writer.h"
 
 namespace {
 
 volatile std::sig_atomic_t g_stop = 0;
-
-// Trims surrounding whitespace and trailing CR of one input line.
-std::string trim_line(const std::string& in) {
-  size_t begin = 0;
-  size_t end = in.size();
-  while (begin < end && (in[begin] == ' ' || in[begin] == '\t' || in[begin] == '\r' || in[begin] == '\n')) {
-    ++begin;
-  }
-  while (end > begin && (in[end - 1] == ' ' || in[end - 1] == '\t' || in[end - 1] == '\r' ||
-                         in[end - 1] == '\n')) {
-    --end;
-  }
-  return in.substr(begin, end - begin);
-}
-
-// A driver directive that arrived on the SQL channel. Recognising it means the driver always gets an
-// answer instead of waiting for a statement that never produces output.
-enum class Directive { None, Restart, ModeExact, ModeAnn, Shutdown };
-
-Directive classify_directive(const std::string& line) {
-  if (line == "--restart") return Directive::Restart;
-  if (line == "--mode exact") return Directive::ModeExact;
-  if (line == "--mode ann") return Directive::ModeAnn;
-  // Graceful shutdown spellings a driver may send instead of a signal.
-  if (line == "quit" || line == "exit" || line == "\\q" || line == "--quit" || line == "--exit" ||
-      line == "--shutdown") {
-    return Directive::Shutdown;
-  }
-  return Directive::None;
-}
 
 void on_signal(int) { g_stop = 1; }
 
@@ -85,57 +55,70 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "failed to open data directory: %s\n", data_dir.c_str());
     return 1;
   }
+
+  // Opening the data directory includes recovery, so the handshake goes out before the first request is
+  // read, exactly as the protocol requires.
   w.ready();
 
-  mv::Splitter splitter;
-  std::vector<std::string> stmts;
+  std::string pending;
   char buf[65536];
-  bool eof = false;
-  while (!eof && g_stop == 0) {
+  while (g_stop == 0) {
     const ssize_t n = ::read(STDIN_FILENO, buf, sizeof(buf));
     if (n < 0) {
       if (errno == EINTR) continue;   // signal: the loop condition handles shutdown
       break;
     }
-    if (n == 0) {
-      eof = true;
-      break;
-    }
-    const std::string chunk(buf, static_cast<size_t>(n));
-    // A directive usually arrives on its own line while the driver waits for a response.
-    if (splitter.empty()) {
-      const Directive directive = classify_directive(trim_line(chunk));
-      if (directive == Directive::Shutdown) {
-        std::fprintf(stderr, "shutdown command received\n");
-        break;
-      }
-      if (directive != Directive::None) {
-        // --restart is the driver's job (it closes and reopens the data directory); --mode only changes
-        // how results may be produced, and this engine always answers exactly, so both are acknowledged.
-        w.result(mv::Result());
+    if (n == 0) break;                // the driver closed stdin
+    pending.append(buf, static_cast<size_t>(n));
+
+    bool stop = false;
+    size_t newline = 0;
+    while ((newline = pending.find('\n')) != std::string::npos) {
+      std::string line = pending.substr(0, newline);
+      pending.erase(0, newline + 1);
+      if (!line.empty() && line.back() == '\r') line.pop_back();
+      if (line.empty()) continue;   // a blank line is not a request, and nothing may be sent back
+
+      mv::JsonValue request;
+      std::string parse_error;
+      if (!mv::json_parse(line, &request, &parse_error)) {
+        w.protocol_error("", "invalid_json", parse_error);
         continue;
       }
-    }
-    stmts.clear();
-    splitter.feed(chunk, &stmts);
-    for (const std::string& sql : stmts) {
-      if (g_stop != 0) break;
-      // A statement consisting only of whitespace/comments produces no output.
-      bool blank = true;
-      for (char c : sql) {
-        if (c != ' ' && c != '\t' && c != '\r' && c != '\n') { blank = false; break; }
+      // Echo the id exactly as it arrived, including its JSON type.
+      const mv::JsonValue* id = mv::json_member(request, "id");
+      const std::string id_json = (id != nullptr && !id->raw.empty()) ? id->raw : std::string("null");
+
+      const mv::JsonValue* op = mv::json_member(request, "op");
+      const std::string op_name = (op != nullptr && op->kind == mv::JsonValue::Kind::Str) ? op->s : "";
+      if (op_name == "shutdown") {
+        // Roll back an open transaction and persist, then acknowledge and leave without another line.
+        const mv::Err rc = db.close();
+        w.result(mv::Result(), id_json);
+        std::fflush(stdout);
+        return rc == mv::Err::Ok ? 0 : 1;
       }
-      if (blank) continue;
-      const mv::Result r = db.execute(sql);
-      w.result(r);
+      if (op_name != "execute") {
+        w.protocol_error(id_json, "unsupported_op",
+                         op_name.empty() ? "missing op" : "unsupported op: " + op_name);
+        continue;
+      }
+      const mv::JsonValue* sql = mv::json_member(request, "sql");
+      if (sql == nullptr || sql->kind != mv::JsonValue::Kind::Str) {
+        w.protocol_error(id_json, "invalid_request", "missing sql string");
+        continue;
+      }
+      // search_mode is accepted (exact or ann) and does not change any answer: this engine always
+      // computes exact distances, which also exceeds the recall floor in ann mode.
+      mv::Result r = db.execute(sql->s);
+      w.result(r, id_json);
     }
+    if (stop) break;
   }
 
-  // Clean shutdown: an open transaction is rolled back and the WAL is checkpointed by close().
   if (g_stop != 0) {
     std::fprintf(stderr, "signal received, shutting down cleanly\n");
   }
   db.close();
-  w.bye();
   return 0;
 }

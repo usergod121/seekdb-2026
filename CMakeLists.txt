@@ -29,6 +29,7 @@ add_executable(minivectordb
   src/db.cpp
   src/exec.cpp
   src/protocol/splitter.cpp
+  src/protocol/json.cpp
   src/protocol/writer.cpp
 )
 

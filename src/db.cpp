@@ -371,6 +371,14 @@ Result Database::execute(const std::string& sql_text) {
                    sql_text[e - 1] == '\n')) {
     --e;
   }
+  // A statement arrives with its terminator ("... ;") over the JSON protocol.
+  while (e > b && sql_text[e - 1] == ';') {
+    --e;
+    while (e > b && (sql_text[e - 1] == ' ' || sql_text[e - 1] == '\t' || sql_text[e - 1] == '\r' ||
+                     sql_text[e - 1] == '\n')) {
+      --e;
+    }
+  }
   if (b == e) {
     res.err = Err::SyntaxError;
     res.message = "empty statement";
