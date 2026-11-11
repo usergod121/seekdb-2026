@@ -170,6 +170,26 @@ ExprPtr Parser::parse_primary() {
 ExprPtr Parser::parse_cmp() {
   ExprPtr lhs = parse_primary();
   if (lhs == nullptr) return nullptr;
+  // "col IN (v1, v2, ...)" - MySQL allows it and a case may well use it for a filter list.
+  if (is_kw("IN")) {
+    advance();
+    if (!accept_punct("(")) return nullptr;
+    auto e = std::make_unique<Expr>();
+    e->kind = ExprKind::BinOp;
+    e->name = "IN";
+    e->args.push_back(std::move(lhs));
+    if (accept_punct(")")) return nullptr;   // an empty list matches nothing; MySQL rejects it
+    for (;;) {
+      ExprPtr value = parse_primary();
+      if (value == nullptr) return nullptr;
+      e->args.push_back(std::move(value));
+      if (accept_punct(",")) continue;
+      if (accept_punct(")")) break;
+      if (err_ != nullptr) *err_ = "expected ',' or ')' in an IN list";
+      return nullptr;
+    }
+    return e;
+  }
   const bool is_cmp = cur().kind == Tok::Punct &&
                       (cur().text == "=" || cur().text == "<" || cur().text == "<=" ||
                        cur().text == ">" || cur().text == ">=" || cur().text == "!=" ||
@@ -350,10 +370,26 @@ Err Parser::parse_select(Stmt* out) {
     }
   }
   if (accept_kw("LIMIT")) {
-    out->limit = parse_primary();
-    if (out->limit == nullptr) return Err::SyntaxError;
+    // MySQL spells a row offset two ways: "LIMIT offset, count" and "LIMIT count OFFSET offset".
+    ExprPtr first = parse_primary();
+    if (first == nullptr) return Err::SyntaxError;
+    if (accept_punct(",")) {
+      out->limit_offset = std::move(first);
+      out->limit = parse_primary();
+      if (out->limit == nullptr) return Err::SyntaxError;
+    } else if (accept_kw("OFFSET")) {
+      out->limit = std::move(first);
+      out->limit_offset = parse_primary();
+      if (out->limit_offset == nullptr) return Err::SyntaxError;
+    } else {
+      out->limit = std::move(first);
+    }
     if (out->limit->kind == ExprKind::IntLit && out->limit->i < 0) {
       return fail(Err::SyntaxError, "negative LIMIT");
+    }
+    if (out->limit_offset != nullptr && out->limit_offset->kind == ExprKind::IntLit &&
+        out->limit_offset->i < 0) {
+      return fail(Err::SyntaxError, "negative LIMIT offset");
     }
   }
   return Err::Ok;

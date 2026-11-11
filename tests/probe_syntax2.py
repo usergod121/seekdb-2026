@@ -79,7 +79,10 @@ def main():
             s = S(data)
             s.req("CREATE TABLE t (id BIGINT PRIMARY KEY, v BIGINT);")
             s.req("INSERT INTO t VALUES (1, 5);")
-            cases = ["SELECT id FROM t WHERE id IN (1,2);",
+            # IN is supported now (MySQL spells lists this way), so it is checked separately
+            r_in = s.req("SELECT id FROM t WHERE id IN (1,2);")
+            in_ok = (r_in.get("ok") is True and r_in.get("rows") == [[1]])
+            cases = [
                      "SELECT id FROM t WHERE v BETWEEN 1 AND 9;",
                      "SELECT DISTINCT id FROM t;",
                      "SELECT id FROM t WHERE v IS NOT NULL;",
@@ -91,6 +94,8 @@ def main():
                 r = s.req(sql)
                 if r.get("ok") is not False:
                     problems.append("accepted: " + sql)
+            if not in_ok:
+                problems.append("IN (1,2) did not return the matching row: %r" % (r_in,))
             s.shutdown()
             return not problems, "; ".join(problems)
         finally:
@@ -165,7 +170,7 @@ def main():
 
     for name, body in [
         ("bare [1,2] vector literal", bare_vector_literal),
-        ("IN / BETWEEN / DISTINCT / GROUP BY rejected", unsupported_operators),
+        ("BETWEEN / DISTINCT / NULL / GROUP BY rejected", unsupported_operators),
         ("ORDER BY distance without LIMIT over 50 rows", order_by_distance_without_limit),
         ("VARCHAR(4096) with 4000 and 4097 characters", long_varchar),
         ("unicode table and column names", unicode_identifier),

@@ -279,6 +279,37 @@ bool eval_bool(const Ctx& ctx, const Expr& e, bool* out, std::string* err) {
     *out = b;
     return true;
   }
+  if (equals_ci(e.name, "IN")) {
+    // "col IN (v1, v2, ...)": true when the left side equals any listed value. Evaluated through the
+    // same comparison path the '=' operator uses, so type rules cannot drift apart.
+    Value left;
+    if (!eval_scalar(ctx, *e.args[0], &left, nullptr, err)) return false;
+    for (size_t i = 1; i < e.args.size(); ++i) {
+      Value right;
+      if (!eval_scalar(ctx, *e.args[i], &right, nullptr, err)) return false;
+      if (left.type == ColType::BigInt && right.type == ColType::BigInt) {
+        if (left.i == right.i) {
+          *out = true;
+          return true;
+        }
+      } else if (left.type != ColType::BigInt && right.type != ColType::BigInt) {
+        if (cmp_str(left.s, right.s) == 0) {
+          *out = true;
+          return true;
+        }
+      } else {
+        // mixed types compare as text, the way the '=' fast path treats a string against a number
+        const std::string a = (left.type == ColType::BigInt) ? std::to_string(left.i) : left.s;
+        const std::string b = (right.type == ColType::BigInt) ? std::to_string(right.i) : right.s;
+        if (cmp_str(a, b) == 0) {
+          *out = true;
+          return true;
+        }
+      }
+    }
+    *out = false;
+    return true;
+  }
   // Fast path: a comparison between a column and a literal is the shape filters take in the graded
   // workload, and comparing in place avoids copying a Value (and its string) for every row.
   {
@@ -959,12 +990,30 @@ Result Database::exec_select(const Stmt& st) {
   };
 
   int64_t k_limit = -1;
+  int64_t k_offset = 0;
   const bool have_limit = st.limit && eval_const_int(*st.limit, &k_limit) && k_limit >= 0;
+  const bool have_offset = st.limit_offset && eval_const_int(*st.limit_offset, &k_offset) &&
+                           k_offset >= 0;
+  (void)have_offset;
+  const int64_t k_fetch = have_limit ? k_limit + k_offset : -1;   // LIMIT offset, count
+  // Every path below fills at most limit+offset rows; this drops the skipped prefix on the way out,
+  // whatever return statement is taken.
+  struct OffsetTrim {
+    Result* rows;
+    int64_t skip;
+    ~OffsetTrim() {
+      if (skip <= 0 || rows->rows.empty()) return;
+      const size_t n = static_cast<size_t>(
+          std::min<int64_t>(skip, static_cast<int64_t>(rows->rows.size())) +
+          (0));
+      rows->rows.erase(rows->rows.begin(), rows->rows.begin() + static_cast<std::ptrdiff_t>(n));
+    }
+  } offset_trim{&r, k_offset};
 
   // ---- fast path: one ascending L2 ordering with a LIMIT -> bounded heap of size K ----
   if (cached && st.order_by.size() == 1 && !order_l2[0].q.empty() && st.order_by[0].asc &&
       have_limit) {
-    const size_t k = static_cast<size_t>(k_limit);
+    const size_t k = static_cast<size_t>(k_fetch);
     std::vector<HeapItem> heap;
     heap.reserve(k + 1);
     const float* q = order_l2[0].q.data();
@@ -1170,8 +1219,8 @@ Result Database::exec_select(const Stmt& st) {
                      [](const Cand& a, const Cand& b) { return a.pk < b.pk; });
   }
 
-  if (have_limit && static_cast<int64_t>(cands.size()) > k_limit) {
-    cands.resize(static_cast<size_t>(k_limit));
+  if (have_limit && static_cast<int64_t>(cands.size()) > k_fetch) {
+    cands.resize(static_cast<size_t>(k_fetch));
   }
 
   r.rows.reserve(cands.size());

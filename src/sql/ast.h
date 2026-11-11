@@ -67,6 +67,7 @@ struct Stmt {
   ExprPtr where;
   std::vector<OrderItem> order_by;
   ExprPtr limit;                      // integer literal expression
+  ExprPtr limit_offset;               // LIMIT [offset,] count / LIMIT count OFFSET offset
   std::vector<std::pair<std::string, ExprPtr>> assignments;  // UPDATE set
 };
 
