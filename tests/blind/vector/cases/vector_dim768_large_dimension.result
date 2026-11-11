@@ -1,0 +1,87 @@
+[
+  {},
+  {
+    "affected_rows": 3
+  },
+  {
+    "columns": [
+      "id",
+      "d"
+    ],
+    "rows": [
+      [
+        2,
+        1.0
+      ],
+      [
+        3,
+        2.0
+      ]
+    ]
+  },
+  {
+    "columns": [
+      "id",
+      "d"
+    ],
+    "rows": [
+      [
+        1,
+        5.0
+      ]
+    ]
+  },
+  {
+    "columns": [
+      "id",
+      "d"
+    ],
+    "rows": [
+      [
+        2,
+        1.0
+      ]
+    ]
+  },
+  {
+    "error": "dimension_mismatch"
+  },
+  {
+    "columns": [
+      "id"
+    ],
+    "rows": [
+      [
+        1
+      ],
+      [
+        2
+      ],
+      [
+        3
+      ]
+    ]
+  },
+  {
+    "error": "dimension_mismatch"
+  },
+  {
+    "error": "dimension_mismatch"
+  },
+  {
+    "columns": [
+      "id",
+      "d"
+    ],
+    "rows": [
+      [
+        2,
+        1.0
+      ],
+      [
+        3,
+        2.0
+      ]
+    ]
+  }
+]

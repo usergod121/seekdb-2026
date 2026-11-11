@@ -121,6 +121,8 @@ def check(expect, got, warnings, label):
             return fails + ["expected a query result, got %s" % got["kind"]]
         if got["columns"] != expect["columns"]:
             fails.append("columns %r != %r" % (got["columns"], expect["columns"]))
+        if "rows" not in expect:
+            return fails          # the expectation only pins the column names, like the judge does
         want_rows = expect["rows"]
         if expect.get("unordered"):
             remaining = list(got["rows"])

@@ -1,0 +1,88 @@
+[
+  {},
+  {
+    "affected_rows": 2
+  },
+  {},
+  {
+    "affected_rows": 1
+  },
+  {},
+  {
+    "affected_rows": 1
+  },
+  {
+    "columns": [
+      "id",
+      "tag"
+    ],
+    "rows": [
+      [
+        1,
+        "独立"
+      ]
+    ]
+  },
+  {},
+  {},
+  {
+    "columns": [
+      "id",
+      "content"
+    ],
+    "rows": [
+      [
+        1,
+        "一改"
+      ],
+      [
+        2,
+        "二"
+      ]
+    ]
+  },
+  {
+    "columns": [
+      "id",
+      "content"
+    ],
+    "rows": [
+      [
+        1,
+        "一改"
+      ],
+      [
+        2,
+        "二"
+      ]
+    ]
+  },
+  {
+    "columns": [
+      "id",
+      "tag"
+    ],
+    "rows": [
+      [
+        1,
+        "独立"
+      ]
+    ]
+  },
+  {
+    "columns": [
+      "id",
+      "distance"
+    ],
+    "rows": [
+      [
+        1,
+        0.0
+      ],
+      [
+        2,
+        1.0
+      ]
+    ]
+  }
+]

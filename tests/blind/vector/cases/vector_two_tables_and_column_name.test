@@ -1,0 +1,11 @@
+CREATE TABLE a1 (id BIGINT PRIMARY KEY, embedding VECTOR(2));
+CREATE TABLE a2 (id BIGINT PRIMARY KEY, tag VARCHAR(8), embedding VECTOR(3));
+INSERT INTO a1 VALUES (1,'[1,0]'),(2,'[0,1]');
+INSERT INTO a2 VALUES (1,'x','[0,0,0]'),(2,'x','[0,0,3]');
+SELECT id, L2_DISTANCE(embedding, '[1,0]') AS d FROM a1 ORDER BY d LIMIT 2;
+SELECT id, L2_DISTANCE(embedding, '[0,0,1]') AS d FROM a2 ORDER BY d LIMIT 2;
+SELECT id, L2_DISTANCE(embedding, '[0,0]') AS d FROM a2 ORDER BY d LIMIT 2;
+CREATE TABLE t3 (id BIGINT PRIMARY KEY, content VARCHAR(8));
+SELECT id, L2_DISTANCE(embedding, '[0,0]') AS d FROM t3 ORDER BY d LIMIT 2;
+SELECT id, L2_DISTANCE(embedding, '[1,0]') FROM a1 ORDER BY id;
+SELECT id, L2_DISTANCE(embedding, '[0,0,0]') AS d FROM a1 ORDER BY d LIMIT 1;

@@ -1,0 +1,76 @@
+{
+  "version": "blind-vector-v1",
+  "scope": "blind",
+  "cases": [
+    {
+      "id": "vector_dim1_boundaries",
+      "group": "vector",
+      "test": "cases/vector_dim1_boundaries.test",
+      "result": "cases/vector_dim1_boundaries.result",
+      "statements": 11
+    },
+    {
+      "id": "vector_dim2_topk_and_filter",
+      "group": "vector",
+      "test": "cases/vector_dim2_topk_and_filter.test",
+      "result": "cases/vector_dim2_topk_and_filter.result",
+      "statements": 10
+    },
+    {
+      "id": "vector_float32_extremes",
+      "group": "vector",
+      "test": "cases/vector_float32_extremes.test",
+      "result": "cases/vector_float32_extremes.result",
+      "statements": 9
+    },
+    {
+      "id": "vector_dim768_large_dimension",
+      "group": "vector",
+      "test": "cases/vector_dim768_large_dimension.test",
+      "result": "cases/vector_dim768_large_dimension.result",
+      "statements": 10
+    },
+    {
+      "id": "vector_invalid_insert",
+      "group": "vector",
+      "test": "cases/vector_invalid_insert.test",
+      "result": "cases/vector_invalid_insert.result",
+      "statements": 12
+    },
+    {
+      "id": "vector_invalid_query_and_update",
+      "group": "vector",
+      "test": "cases/vector_invalid_query_and_update.test",
+      "result": "cases/vector_invalid_query_and_update.result",
+      "statements": 11
+    },
+    {
+      "id": "vector_index_lifecycle",
+      "group": "vector",
+      "test": "cases/vector_index_lifecycle.test",
+      "result": "cases/vector_index_lifecycle.result",
+      "statements": 11
+    },
+    {
+      "id": "vector_exact_vs_ann_modes",
+      "group": "vector",
+      "test": "cases/vector_exact_vs_ann_modes.test",
+      "result": "cases/vector_exact_vs_ann_modes.result",
+      "statements": 9
+    },
+    {
+      "id": "vector_two_tables_and_column_name",
+      "group": "vector",
+      "test": "cases/vector_two_tables_and_column_name.test",
+      "result": "cases/vector_two_tables_and_column_name.result",
+      "statements": 11
+    },
+    {
+      "id": "vector_index_ddl_errors",
+      "group": "vector",
+      "test": "cases/vector_index_ddl_errors.test",
+      "result": "cases/vector_index_ddl_errors.result",
+      "statements": 9
+    }
+  ]
+}

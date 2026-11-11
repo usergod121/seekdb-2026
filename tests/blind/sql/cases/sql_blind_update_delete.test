@@ -1,0 +1,12 @@
+CREATE TABLE t (id BIGINT PRIMARY KEY, v BIGINT, s VARCHAR(4));
+INSERT INTO t VALUES (1, 10, 'a'), (2, 10, 'b'), (3, 20, 'c'), (4, 20, 'd'), (5, 30, 'e');
+UPDATE t SET v = 99 WHERE v >= 20;
+SELECT id, v, s FROM t ORDER BY id;
+UPDATE t SET s = 'z' WHERE id = 999;
+UPDATE t SET s = 'zzzzz' WHERE v = 99;
+SELECT id, s FROM t ORDER BY id;
+UPDATE t SET v = 10 WHERE v = 10;
+DELETE FROM t WHERE v = 99 AND id > 3;
+DELETE FROM t WHERE v = 12345;
+SELECT id, v FROM t ORDER BY id;
+DELETE FROM t;

@@ -1,0 +1,40 @@
+[
+  {},
+  {
+    "affected_rows": 2
+  },
+  {
+    "columns": ["id", "note"],
+    "rows": [
+      [1, "one"],
+      [2, "two"]
+    ]
+  },
+  {"error": "table_exists"},
+  {
+    "columns": ["id", "note"],
+    "rows": [
+      [1, "one"],
+      [2, "two"]
+    ]
+  },
+  {
+    "affected_rows": 1
+  },
+  {
+    "columns": ["id", "note"],
+    "rows": [
+      [1, "one"],
+      [2, "two"],
+      [3, "three"]
+    ]
+  },
+  {
+    "columns": ["id", "note"],
+    "rows": [
+      [1, "one"],
+      [2, "two"],
+      [3, "three"]
+    ]
+  }
+]

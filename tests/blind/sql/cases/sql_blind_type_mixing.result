@@ -1,0 +1,96 @@
+[
+  {},
+  {
+    "affected_rows": 1
+  },
+  {
+    "columns": [
+      "id",
+      "n"
+    ],
+    "rows": [
+      [
+        1,
+        10
+      ]
+    ]
+  },
+  {
+    "affected_rows": 1
+  },
+  {
+    "columns": [
+      "s"
+    ],
+    "rows": [
+      [
+        "42"
+      ]
+    ]
+  },
+  {
+    "columns": [
+      "id"
+    ],
+    "rows": [
+      [
+        1
+      ]
+    ]
+  },
+  {
+    "columns": [
+      "id"
+    ],
+    "rows": [
+      [
+        2
+      ]
+    ]
+  },
+  {
+    "columns": [
+      "id"
+    ],
+    "rows": [
+      [
+        2
+      ]
+    ]
+  },
+  {
+    "columns": [
+      "id",
+      "n",
+      "s"
+    ],
+    "rows": [
+      [
+        1,
+        10,
+        "x"
+      ],
+      [
+        2,
+        20,
+        "42"
+      ]
+    ]
+  },
+  {
+    "affected_rows": 1
+  },
+  {
+    "columns": [
+      "n"
+    ],
+    "rows": [
+      [
+        99
+      ]
+    ]
+  },
+  {
+    "affected_rows": 1
+  }
+]

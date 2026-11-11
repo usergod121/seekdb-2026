@@ -1,0 +1,82 @@
+[
+  {},
+  {
+    "affected_rows": 200
+  },
+  {
+    "affected_rows": 200
+  },
+  {
+    "affected_rows": 200
+  },
+  {
+    "affected_rows": 200
+  },
+  {
+    "affected_rows": 200
+  },
+  {},
+  {
+    "affected_rows": 1000
+  },
+  {
+    "columns": [
+      "id"
+    ],
+    "rows": []
+  },
+  {},
+  {
+    "columns": [
+      "id"
+    ],
+    "rows": [
+      [
+        1000
+      ],
+      [
+        999
+      ]
+    ]
+  },
+  {
+    "columns": [
+      "id",
+      "distance"
+    ],
+    "rows": [
+      [
+        2,
+        2.0
+      ],
+      [
+        4,
+        4.0
+      ],
+      [
+        6,
+        6.0
+      ]
+    ]
+  },
+  {
+    "columns": [
+      "id",
+      "distance"
+    ],
+    "rows": [
+      [
+        1,
+        1.0
+      ],
+      [
+        2,
+        2.0
+      ],
+      [
+        3,
+        3.0
+      ]
+    ]
+  }
+]

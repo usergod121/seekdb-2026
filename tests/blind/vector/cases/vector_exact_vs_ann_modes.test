@@ -1,0 +1,11 @@
+CREATE TABLE av (id BIGINT PRIMARY KEY, category VARCHAR(8), embedding VECTOR(2));
+INSERT INTO av VALUES (1,'skip','[0,0]'),(2,'skip','[0.5,0]'),(3,'keep','[3,4]'),(4,'keep','[6,8]'),(5,'single','[1,1]');
+CREATE VECTOR INDEX av_emb ON av(embedding);
+--mode ann
+SELECT id, L2_DISTANCE(embedding, '[0,0]') AS d FROM av WHERE category = 'keep' ORDER BY d LIMIT 10;
+SELECT id, L2_DISTANCE(embedding, '[0,0]') AS d FROM av WHERE category = 'absent' ORDER BY d LIMIT 5;
+SELECT id, L2_DISTANCE(embedding, '[0,0]') AS d FROM av WHERE category = 'single' ORDER BY d LIMIT 5;
+SELECT id, L2_DISTANCE(embedding, '[0,0]') AS d FROM av WHERE id >= 3 AND id <= 5 ORDER BY d LIMIT 10;
+--mode exact
+SELECT id, L2_DISTANCE(embedding, '[0,0]') AS d FROM av ORDER BY d LIMIT 2;
+SELECT id, L2_DISTANCE(embedding, '[0,0]') AS d FROM av ORDER BY d LIMIT 5;

@@ -1,0 +1,53 @@
+[
+  {},
+  {},
+  {
+    "affected_rows": 2
+  },
+  {
+    "affected_rows": 2
+  },
+  {
+    "columns": [
+      "id",
+      "d"
+    ],
+    "rows": [
+      [
+        1,
+        0.0
+      ],
+      [
+        2,
+        1.4142135623730951
+      ]
+    ]
+  },
+  {
+    "columns": [
+      "id",
+      "d"
+    ],
+    "rows": [
+      [
+        1,
+        1.0
+      ],
+      [
+        2,
+        2.0
+      ]
+    ]
+  },
+  {
+    "error": "dimension_mismatch"
+  },
+  {},
+  {
+    "error": "unknown_column"
+  },
+  {},
+  {
+    "error": "dimension_mismatch"
+  }
+]

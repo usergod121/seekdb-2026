@@ -1,0 +1,13 @@
+CREATE TABLE ix (id BIGINT PRIMARY KEY, category VARCHAR(8), embedding VECTOR(2));
+INSERT INTO ix VALUES (1,'keep','[3,4]'),(2,'skip','[0,0]'),(3,'keep','[6,8]'),(4,'keep','[-3,-4]');
+CREATE VECTOR INDEX ix_emb ON ix(embedding);
+INSERT INTO ix VALUES (5,'keep','[0,0]');
+UPDATE ix SET embedding = '[0,3]' WHERE id = 3;
+DELETE FROM ix WHERE id = 2;
+SELECT id FROM ix ORDER BY id;
+SELECT id, L2_DISTANCE(embedding, '[0,0]') AS d FROM ix WHERE category = 'keep' ORDER BY d LIMIT 3;
+SELECT id, L2_DISTANCE(embedding, '[0,0]') AS d FROM ix WHERE category = 'keep' ORDER BY d LIMIT 10;
+--restart
+SELECT id, L2_DISTANCE(embedding, '[0,0]') AS d FROM ix WHERE category = 'keep' ORDER BY d LIMIT 10;
+--mode ann
+SELECT id, L2_DISTANCE(embedding, '[0,0]') AS d FROM ix WHERE category = 'keep' ORDER BY d LIMIT 10;

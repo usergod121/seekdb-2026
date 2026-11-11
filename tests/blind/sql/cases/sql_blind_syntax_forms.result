@@ -1,0 +1,95 @@
+[
+  {},
+  {
+    "affected_rows": 1
+  },
+  {
+    "columns": [
+      "id"
+    ],
+    "rows": [
+      [
+        1
+      ]
+    ]
+  },
+  {
+    "columns": [
+      "id",
+      "Content"
+    ],
+    "rows": [
+      [
+        1,
+        "a"
+      ]
+    ]
+  },
+  {
+    "columns": [
+      "c"
+    ],
+    "rows": [
+      [
+        "a"
+      ]
+    ]
+  },
+  {
+    "columns": [
+      "id"
+    ],
+    "rows": [
+      [
+        1
+      ]
+    ]
+  },
+  {
+    "error": "multiple_statements"
+  },
+  {
+    "columns": [
+      "id"
+    ],
+    "rows": [
+      [
+        1
+      ]
+    ]
+  },
+  {
+    "error": "unsupported_aggregate"
+  },
+  {
+    "affected_rows": 1
+  },
+  {
+    "columns": [
+      "id",
+      "Content"
+    ],
+    "rows": [
+      [
+        3,
+        "c"
+      ]
+    ]
+  },
+  {
+    "columns": [
+      "c",
+      "k"
+    ],
+    "rows": [
+      [
+        "a",
+        1
+      ],
+      [
+        "c",
+        3
+      ]
+    ]
+  }
+]

@@ -216,6 +216,17 @@ bool like_match(const std::string& text, const std::string& pattern) {
   return p == pattern.size();
 }
 
+// A string cell compared with a number is compared numerically, the way MySQL does it: the
+// text is read as a number, and text that is not a number counts as zero.
+double text_as_number(const std::string& text) {
+  const char* begin = text.c_str();
+  char* end = nullptr;
+  const double value = std::strtod(begin, &end);
+  if (end == begin) return 0.0;
+  while (*end == ' ' || *end == '\t') ++end;
+  return (*end == '\0') ? value : 0.0;
+}
+
 // Three-way comparison used by BETWEEN: numbers compare numerically, text by code point.
 int compare_for_between(const Value& a, const Value& b) {
   if (a.type == ColType::BigInt && b.type == ColType::BigInt) {
@@ -413,6 +424,11 @@ bool eval_bool(const Ctx& ctx, const Expr& e, bool* out, std::string* err) {
       } else if (lit_e->kind == ExprKind::StrLit && v.type == ColType::BigInt) {
         const std::string as_text = std::to_string(v.i);
         cmp = cmp_str(as_text, lit_e->s);
+        } else if (lit_e->kind == ExprKind::IntLit && v.type == ColType::Varchar) {
+          // MySQL compares a number against text numerically, converting the text side
+          const double text_number = text_as_number(v.s);
+          const double lit_number = static_cast<double>(lit_e->i);
+          cmp = (text_number < lit_number) ? -1 : (text_number > lit_number ? 1 : 0);
       } else {
         if (err) *err = "cannot compare these types";
         return false;

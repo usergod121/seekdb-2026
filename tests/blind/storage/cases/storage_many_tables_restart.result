@@ -1,0 +1,174 @@
+[
+  {},
+  {
+    "affected_rows": 1
+  },
+  {
+    "columns": ["id", "a"],
+    "rows": [
+      [7, 77]
+    ]
+  },
+  {},
+  {
+    "affected_rows": 3
+  },
+  {},
+  {
+    "affected_rows": 3
+  },
+  {},
+  {
+    "affected_rows": 3
+  },
+  {},
+  {
+    "affected_rows": 3
+  },
+  {},
+  {
+    "affected_rows": 3
+  },
+  {},
+  {
+    "affected_rows": 3
+  },
+  {},
+  {
+    "affected_rows": 3
+  },
+  {},
+  {
+    "affected_rows": 3
+  },
+  {},
+  {
+    "affected_rows": 3
+  },
+  {},
+  {
+    "affected_rows": 3
+  },
+  {},
+  {
+    "affected_rows": 3
+  },
+  {},
+  {
+    "affected_rows": 3
+  },
+  {
+    "columns": ["id", "tag", "n"],
+    "rows": [
+      [1, "a", 1],
+      [2, "b", 2],
+      [3, "c", 3]
+    ]
+  },
+  {
+    "columns": ["id", "tag", "n"],
+    "rows": [
+      [1, "a", 2],
+      [2, "b", 4],
+      [3, "c", 6]
+    ]
+  },
+  {
+    "columns": ["id", "tag", "n"],
+    "rows": [
+      [1, "a", 3],
+      [2, "b", 6],
+      [3, "c", 9]
+    ]
+  },
+  {
+    "columns": ["id", "tag", "n"],
+    "rows": [
+      [1, "a", 4],
+      [2, "b", 8],
+      [3, "c", 12]
+    ]
+  },
+  {
+    "columns": ["id", "tag", "n"],
+    "rows": [
+      [1, "a", 5],
+      [2, "b", 10],
+      [3, "c", 15]
+    ]
+  },
+  {
+    "columns": ["id", "tag", "n"],
+    "rows": [
+      [1, "a", 6],
+      [2, "b", 12],
+      [3, "c", 18]
+    ]
+  },
+  {
+    "columns": ["id", "tag", "n"],
+    "rows": [
+      [1, "a", 7],
+      [2, "b", 14],
+      [3, "c", 21]
+    ]
+  },
+  {
+    "columns": ["id", "tag", "n"],
+    "rows": [
+      [1, "a", 8],
+      [2, "b", 16],
+      [3, "c", 24]
+    ]
+  },
+  {
+    "columns": ["id", "tag", "n"],
+    "rows": [
+      [1, "a", 9],
+      [2, "b", 18],
+      [3, "c", 27]
+    ]
+  },
+  {
+    "columns": ["id", "tag", "n"],
+    "rows": [
+      [1, "a", 10],
+      [2, "b", 20],
+      [3, "c", 30]
+    ]
+  },
+  {
+    "columns": ["id", "tag", "n"],
+    "rows": [
+      [1, "a", 11],
+      [2, "b", 22],
+      [3, "c", 33]
+    ]
+  },
+  {
+    "columns": ["id", "tag", "n"],
+    "rows": [
+      [1, "a", 12],
+      [2, "b", 24],
+      [3, "c", 36]
+    ]
+  },
+  {
+    "affected_rows": 1
+  },
+  {
+    "columns": ["id", "tag", "n"],
+    "rows": [
+      [1, "a", 12],
+      [2, "b", 24],
+      [3, "c", 36],
+      [4, "d", 48]
+    ]
+  },
+  {
+    "columns": ["id", "a"],
+    "rows": [
+      [7, 77]
+    ]
+  }
+]

@@ -1,0 +1,12 @@
+CREATE TABLE iv (id BIGINT PRIMARY KEY, embedding VECTOR(2));
+INSERT INTO iv VALUES (1,'[1,2]'),(2,'[nan,0]');
+SELECT id FROM iv ORDER BY id;
+INSERT INTO iv VALUES (3,'[1,2]'),(4,'[3.5e38,0]');
+SELECT id FROM iv ORDER BY id;
+INSERT INTO iv VALUES (5,'[1,2]'),(6,'[1]');
+SELECT id FROM iv ORDER BY id;
+INSERT INTO iv VALUES (7,'[1 2]');
+INSERT INTO iv VALUES (8,'[]');
+INSERT INTO iv VALUES (1,'[1,2]');
+INSERT INTO iv VALUES (2,'[inf,0]');
+SELECT id, L2_DISTANCE(embedding, '[1,2]') AS d FROM iv ORDER BY id;

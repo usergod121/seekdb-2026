@@ -1,0 +1,76 @@
+{
+  "version": "blind-sql-v1",
+  "scope": "blind",
+  "cases": [
+    {
+      "id": "sql_blind_bigint_extremes",
+      "group": "sql",
+      "test": "cases/sql_blind_bigint_extremes.test",
+      "result": "cases/sql_blind_bigint_extremes.result",
+      "statements": 11
+    },
+    {
+      "id": "sql_blind_varchar_limits",
+      "group": "sql",
+      "test": "cases/sql_blind_varchar_limits.test",
+      "result": "cases/sql_blind_varchar_limits.result",
+      "statements": 12
+    },
+    {
+      "id": "sql_blind_string_literals",
+      "group": "sql",
+      "test": "cases/sql_blind_string_literals.test",
+      "result": "cases/sql_blind_string_literals.result",
+      "statements": 12
+    },
+    {
+      "id": "sql_blind_order_ties",
+      "group": "sql",
+      "test": "cases/sql_blind_order_ties.test",
+      "result": "cases/sql_blind_order_ties.result",
+      "statements": 12
+    },
+    {
+      "id": "sql_blind_limit_projection",
+      "group": "sql",
+      "test": "cases/sql_blind_limit_projection.test",
+      "result": "cases/sql_blind_limit_projection.result",
+      "statements": 12
+    },
+    {
+      "id": "sql_blind_update_delete",
+      "group": "sql",
+      "test": "cases/sql_blind_update_delete.test",
+      "result": "cases/sql_blind_update_delete.result",
+      "statements": 12
+    },
+    {
+      "id": "sql_blind_syntax_forms",
+      "group": "sql",
+      "test": "cases/sql_blind_syntax_forms.test",
+      "result": "cases/sql_blind_syntax_forms.result",
+      "statements": 12
+    },
+    {
+      "id": "sql_blind_long_string",
+      "group": "sql",
+      "test": "cases/sql_blind_long_string.test",
+      "result": "cases/sql_blind_long_string.result",
+      "statements": 9
+    },
+    {
+      "id": "sql_blind_reopen_boundaries",
+      "group": "sql",
+      "test": "cases/sql_blind_reopen_boundaries.test",
+      "result": "cases/sql_blind_reopen_boundaries.result",
+      "statements": 10
+    },
+    {
+      "id": "sql_blind_type_mixing",
+      "group": "sql",
+      "test": "cases/sql_blind_type_mixing.test",
+      "result": "cases/sql_blind_type_mixing.result",
+      "statements": 12
+    }
+  ]
+}

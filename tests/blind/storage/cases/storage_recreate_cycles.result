@@ -1,0 +1,77 @@
+[
+  {},
+  {
+    "affected_rows": 2
+  },
+  {
+    "columns": ["id", "v"],
+    "rows": [
+      [1, 10],
+      [2, 20]
+    ]
+  },
+  {},
+  {
+    "affected_rows": 1
+  },
+  {
+    "columns": ["id", "v"],
+    "rows": [
+      [1, 10],
+      [2, 20]
+    ]
+  },
+  {
+    "columns": ["id", "v"],
+    "rows": [
+      [5, "five"]
+    ]
+  },
+  {
+    "columns": ["id", "v"],
+    "rows": [
+      [1, 10],
+      [2, 20]
+    ]
+  },
+  {},
+  {
+    "affected_rows": 1
+  },
+  {
+    "columns": ["id", "v", "note"],
+    "rows": [
+      [9, 90, "nine"]
+    ]
+  },
+  {
+    "columns": ["id", "v"],
+    "rows": [
+      [1, 10],
+      [2, 20]
+    ]
+  },
+  {
+    "columns": ["id", "v"],
+    "rows": [
+      [5, "five"]
+    ]
+  },
+  {
+    "affected_rows": 1
+  },
+  {
+    "columns": ["id", "v", "note"],
+    "rows": [
+      [9, 90, "nine"],
+      [10, 100, "ten"]
+    ]
+  },
+  {
+    "columns": ["id", "v"],
+    "rows": [
+      [1, 10],
+      [2, 20]
+    ]
+  }
+]

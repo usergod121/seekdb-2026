@@ -1,0 +1,54 @@
+[
+  {},
+  {
+    "error": "invalid_vector"
+  },
+  {
+    "columns": [
+      "id"
+    ],
+    "rows": []
+  },
+  {
+    "error": "invalid_vector"
+  },
+  {
+    "columns": [
+      "id"
+    ],
+    "rows": []
+  },
+  {
+    "error": "dimension_mismatch"
+  },
+  {
+    "columns": [
+      "id"
+    ],
+    "rows": []
+  },
+  {
+    "error": "invalid_vector"
+  },
+  {
+    "error": "dimension_mismatch"
+  },
+  {
+    "affected_rows": 1
+  },
+  {
+    "error": "invalid_vector"
+  },
+  {
+    "columns": [
+      "id",
+      "d"
+    ],
+    "rows": [
+      [
+        1,
+        0.0
+      ]
+    ]
+  }
+]

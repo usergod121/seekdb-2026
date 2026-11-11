@@ -1,0 +1,49 @@
+[
+  {},
+  {
+    "error": "unknown_table"
+  },
+  {
+    "error": "unknown_column"
+  },
+  {
+    "error": "invalid_vector_column"
+  },
+  {},
+  {
+    "affected_rows": 2
+  },
+  {
+    "columns": [
+      "id",
+      "d"
+    ],
+    "rows": [
+      [
+        1,
+        1.0
+      ],
+      [
+        2,
+        5.0
+      ]
+    ]
+  },
+  {
+    "columns": [
+      "id",
+      "d"
+    ],
+    "rows": [
+      [
+        1,
+        1.0
+      ],
+      [
+        2,
+        5.0
+      ]
+    ]
+  },
+  {}
+]

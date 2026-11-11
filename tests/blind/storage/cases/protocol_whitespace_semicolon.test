@@ -1,0 +1,14 @@
+CREATE TABLE ws (id BIGINT PRIMARY KEY, label VARCHAR(32), flag BIGINT);
+INSERT INTO ws VALUES (1, 'a;b;c', 10);
+INSERT INTO ws VALUES (2, 'x ; y', 20);
+INSERT  INTO  ws  VALUES  (3, 'p;q', 30)   ;
+SELECT id, label FROM ws ORDER BY id;
+SELECT  id ,  label  FROM  ws  WHERE  id  =  2   ;
+UPDATE  ws  SET  flag  =  99  WHERE  id  =  1  ;
+SELECT id, flag FROM ws WHERE id = 1 ;
+SELECT id FROM ws WHERE label = 'a;b;c' ;
+DELETE  FROM  ws  WHERE  id  =  3  ;
+SELECT  id ,label FROM ws ORDER BY id ;
+--restart
+SELECT  id , label FROM ws ;
+SELECT id FROM ws WHERE label = 'x ; y';

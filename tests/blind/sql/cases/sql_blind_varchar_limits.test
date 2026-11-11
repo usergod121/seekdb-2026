@@ -1,0 +1,12 @@
+CREATE TABLE t (id BIGINT PRIMARY KEY, s VARCHAR(4));
+INSERT INTO t VALUES (1, '');
+INSERT INTO t VALUES (2, 'abcd');
+INSERT INTO t VALUES (3, '中文测试');
+INSERT INTO t VALUES (4, '😀😀😀😀');
+INSERT INTO t VALUES (5, 'abcde');
+INSERT INTO t VALUES (6, '中文测试啊');
+INSERT INTO t VALUES (7, '😀😀😀😀😀');
+INSERT INTO t VALUES (8, 'ok'), (9, 'abcde');
+SELECT id, s FROM t ORDER BY id;
+SELECT id FROM t WHERE s = '';
+SELECT id FROM t ORDER BY s;

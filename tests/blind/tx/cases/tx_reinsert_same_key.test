@@ -1,0 +1,15 @@
+CREATE TABLE docs (id BIGINT PRIMARY KEY, content VARCHAR(16));
+INSERT INTO docs VALUES (7, '七');
+BEGIN;
+DELETE FROM docs WHERE id = 7;
+SELECT id, content FROM docs ORDER BY id;
+INSERT INTO docs VALUES (7, '七新');
+SELECT id, content FROM docs ORDER BY id;
+ROLLBACK;
+SELECT id, content FROM docs ORDER BY id;
+BEGIN;
+DELETE FROM docs WHERE id = 7;
+INSERT INTO docs VALUES (7, '七再');
+COMMIT;
+--restart
+SELECT id, content FROM docs ORDER BY id;

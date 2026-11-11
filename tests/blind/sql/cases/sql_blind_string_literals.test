@@ -1,0 +1,12 @@
+CREATE TABLE t (id BIGINT PRIMARY KEY, s VARCHAR(32));
+INSERT INTO t VALUES (1, 'it''s');
+INSERT INTO t VALUES (2, 'a;b');
+INSERT INTO t VALUES (3, 'quote'' and ''q''');
+INSERT INTO t VALUES (4, 'a\tb');
+INSERT INTO t VALUES (5, 'line\nbreak');
+SELECT id FROM t ORDER BY id;
+SELECT s FROM t WHERE id = 1;
+SELECT s FROM t WHERE id = 2;
+SELECT s FROM t WHERE id = 3;
+SELECT id FROM t WHERE s = 'a\tb';
+SELECT id FROM t WHERE s = 'line\nbreak';

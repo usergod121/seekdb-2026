@@ -1,0 +1,11 @@
+CREATE TABLE v1 (id BIGINT PRIMARY KEY, tag VARCHAR(8), embedding VECTOR(1));
+INSERT INTO v1 VALUES (5,'z','[0]'),(2,'z','[-0]'),(7,'n','[-3]'),(8,'n','[5]'),(4,'t','[1e-45]'),(9,'r','[16777216]'),(6,'r','[16777217]');
+SELECT id, L2_DISTANCE(embedding, '[0]') AS d FROM v1 WHERE tag = 'z' ORDER BY d LIMIT 10;
+SELECT id, L2_DISTANCE(embedding, '[0]') AS d FROM v1 WHERE tag = 'z' ORDER BY d LIMIT 1;
+SELECT id, L2_DISTANCE(embedding, '[0]') AS d FROM v1 WHERE tag = 'n' ORDER BY d LIMIT 10;
+SELECT id, L2_DISTANCE(embedding, '[5]') AS d FROM v1 WHERE tag = 'n' ORDER BY d LIMIT 1;
+SELECT id, L2_DISTANCE(embedding, '[0]') AS d FROM v1 WHERE tag = 't' ORDER BY d LIMIT 10;
+SELECT id, L2_DISTANCE(embedding, '[16777216]') AS d FROM v1 WHERE tag = 'r' ORDER BY d LIMIT 10;
+SELECT id, L2_DISTANCE(embedding, '[0]') AS d FROM v1 WHERE tag = 'absent' ORDER BY d LIMIT 5;
+SELECT id FROM v1 ORDER BY id;
+SELECT id, L2_DISTANCE(embedding, '[0]') AS d FROM v1 ORDER BY d LIMIT 0;

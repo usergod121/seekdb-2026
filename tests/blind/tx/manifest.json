@@ -1,0 +1,76 @@
+{
+  "version": "blind-tx-v1",
+  "scope": "blind",
+  "cases": [
+    {
+      "id": "tx_control_noop",
+      "group": "transaction",
+      "test": "cases/tx_control_noop.test",
+      "result": "cases/tx_control_noop.result",
+      "statements": 11
+    },
+    {
+      "id": "tx_mixed_dml_rollback",
+      "group": "transaction",
+      "test": "cases/tx_mixed_dml_rollback.test",
+      "result": "cases/tx_mixed_dml_rollback.result",
+      "statements": 13
+    },
+    {
+      "id": "tx_failed_insert_atomicity",
+      "group": "transaction",
+      "test": "cases/tx_failed_insert_atomicity.test",
+      "result": "cases/tx_failed_insert_atomicity.result",
+      "statements": 13
+    },
+    {
+      "id": "tx_failed_values_atomicity",
+      "group": "transaction",
+      "test": "cases/tx_failed_values_atomicity.test",
+      "result": "cases/tx_failed_values_atomicity.result",
+      "statements": 13
+    },
+    {
+      "id": "tx_restart_mid_sequence",
+      "group": "transaction",
+      "test": "cases/tx_restart_mid_sequence.test",
+      "result": "cases/tx_restart_mid_sequence.result",
+      "statements": 13
+    },
+    {
+      "id": "tx_reinsert_same_key",
+      "group": "transaction",
+      "test": "cases/tx_reinsert_same_key.test",
+      "result": "cases/tx_reinsert_same_key.result",
+      "statements": 14
+    },
+    {
+      "id": "tx_autocommit_interleaved",
+      "group": "transaction",
+      "test": "cases/tx_autocommit_interleaved.test",
+      "result": "cases/tx_autocommit_interleaved.result",
+      "statements": 13
+    },
+    {
+      "id": "tx_ddl_in_transaction",
+      "group": "transaction",
+      "test": "cases/tx_ddl_in_transaction.test",
+      "result": "cases/tx_ddl_in_transaction.result",
+      "statements": 13
+    },
+    {
+      "id": "tx_nested_begin",
+      "group": "transaction",
+      "test": "cases/tx_nested_begin.test",
+      "result": "cases/tx_nested_begin.result",
+      "statements": 13
+    },
+    {
+      "id": "tx_large_table_rollback",
+      "group": "transaction",
+      "test": "cases/tx_large_table_rollback.test",
+      "result": "cases/tx_large_table_rollback.result",
+      "statements": 13
+    }
+  ]
+}

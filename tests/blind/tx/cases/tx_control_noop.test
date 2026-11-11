@@ -1,0 +1,12 @@
+CREATE TABLE docs (id BIGINT PRIMARY KEY, content VARCHAR(16), embedding VECTOR(2));
+INSERT INTO docs VALUES (1, '一', '[1,2]');
+BEGIN;
+COMMIT;
+SELECT id, content FROM docs ORDER BY id;
+BEGIN;
+ROLLBACK;
+SELECT id FROM docs ORDER BY id;
+COMMIT;
+ROLLBACK;
+--restart
+SELECT id, content FROM docs ORDER BY id;

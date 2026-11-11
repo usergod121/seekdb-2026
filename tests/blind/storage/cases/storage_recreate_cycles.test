@@ -1,0 +1,20 @@
+CREATE TABLE cyc_a (id BIGINT PRIMARY KEY, v BIGINT);
+INSERT INTO cyc_a VALUES (1,10),(2,20);
+--restart
+SELECT id, v FROM cyc_a ORDER BY id;
+CREATE TABLE cyc_b (id BIGINT PRIMARY KEY, v VARCHAR(8));
+INSERT INTO cyc_b VALUES (5,'five');
+SELECT id, v FROM cyc_a ORDER BY id;
+--restart
+SELECT id, v FROM cyc_b ORDER BY id;
+SELECT id, v FROM cyc_a ORDER BY id;
+CREATE TABLE cyc_c (id BIGINT PRIMARY KEY, v BIGINT, note VARCHAR(8));
+INSERT INTO cyc_c VALUES (9,90,'nine');
+--restart
+SELECT id, v, note FROM cyc_c ORDER BY id;
+SELECT id, v FROM cyc_a ORDER BY id;
+SELECT id, v FROM cyc_b ORDER BY id;
+INSERT INTO cyc_c VALUES (10,100,'ten');
+--restart
+SELECT id, v, note FROM cyc_c ORDER BY id;
+SELECT id, v FROM cyc_a ORDER BY id;

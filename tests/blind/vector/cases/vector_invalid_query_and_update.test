@@ -1,0 +1,11 @@
+CREATE TABLE iv (id BIGINT PRIMARY KEY, embedding VECTOR(2));
+INSERT INTO iv VALUES (1,'[1,2]'),(2,'[3,4]');
+SELECT id, L2_DISTANCE(embedding, '[nan,0]') AS d FROM iv ORDER BY d LIMIT 2;
+SELECT id, L2_DISTANCE(embedding, '[1]') AS d FROM iv ORDER BY d LIMIT 2;
+SELECT id, L2_DISTANCE(embedding, '[1,2,]') AS d FROM iv ORDER BY d LIMIT 2;
+SELECT id FROM iv ORDER BY id;
+UPDATE iv SET embedding = '[1,2' WHERE id = 1;
+UPDATE iv SET embedding = '[3]' WHERE id = 1;
+UPDATE iv SET embedding = '[a,2]' WHERE id = 1;
+UPDATE iv SET embedding = '[4,5]' WHERE id = 1;
+SELECT id, L2_DISTANCE(embedding, '[4,5]') AS d FROM iv ORDER BY id;

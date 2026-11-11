@@ -1,0 +1,13 @@
+CREATE TABLE docs (id BIGINT PRIMARY KEY, content VARCHAR(16));
+INSERT INTO docs VALUES (1, 'a');
+BEGIN;
+UPDATE docs SET content = 'b' WHERE id = 1;
+BEGIN;
+COMMIT;
+SELECT id, content FROM docs ORDER BY id;
+BEGIN;
+UPDATE docs SET content = 'c' WHERE id = 1;
+BEGIN;
+UPDATE docs SET content = 'd' WHERE id = 1;
+COMMIT;
+SELECT id, content FROM docs ORDER BY id;

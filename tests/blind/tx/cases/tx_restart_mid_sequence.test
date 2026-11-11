@@ -1,0 +1,15 @@
+CREATE TABLE docs (id BIGINT PRIMARY KEY, content VARCHAR(16), embedding VECTOR(2));
+INSERT INTO docs VALUES (1, '一', '[0,0]'), (2, '二', '[1,0]');
+BEGIN;
+UPDATE docs SET content = '二改' WHERE id = 2;
+INSERT INTO docs VALUES (3, '三', '[0,2]');
+COMMIT;
+BEGIN;
+DELETE FROM docs WHERE id = 1;
+UPDATE docs SET content = '三改' WHERE id = 3;
+--restart
+SELECT id, content FROM docs ORDER BY id;
+INSERT INTO docs VALUES (4, '四', '[3,4]');
+--restart
+SELECT id, L2_DISTANCE(embedding, '[0,0]') AS distance FROM docs ORDER BY distance LIMIT 4;
+SELECT id, content FROM docs ORDER BY id;

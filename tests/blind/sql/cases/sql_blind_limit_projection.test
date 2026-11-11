@@ -1,0 +1,12 @@
+CREATE TABLE t (id BIGINT PRIMARY KEY, a BIGINT, b VARCHAR(8));
+INSERT INTO t VALUES (1, 10, 'x'), (2, 20, 'y'), (3, 30, 'x');
+SELECT id FROM t ORDER BY id LIMIT 0;
+SELECT id FROM t ORDER BY id LIMIT 100;
+SELECT id FROM t WHERE a > 100;
+SELECT id FROM t WHERE a > 100 LIMIT 5;
+SELECT id AS k, b AS label FROM t WHERE a >= 10 AND a <= 30 AND b = 'x' AND id < 3 ORDER BY id;
+SELECT * FROM t WHERE id = 2;
+SELECT b, id FROM t ORDER BY id LIMIT 1;
+SELECT id FROM t WHERE b = 'x' AND a = 30;
+SELECT id FROM t WHERE id = 2 AND id = 3;
+SELECT id FROM t WHERE b = 'y';

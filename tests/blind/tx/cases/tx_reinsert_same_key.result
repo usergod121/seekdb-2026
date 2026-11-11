@@ -1,0 +1,65 @@
+[
+  {},
+  {
+    "affected_rows": 1
+  },
+  {},
+  {
+    "affected_rows": 1
+  },
+  {
+    "columns": [
+      "id",
+      "content"
+    ],
+    "rows": []
+  },
+  {
+    "affected_rows": 1
+  },
+  {
+    "columns": [
+      "id",
+      "content"
+    ],
+    "rows": [
+      [
+        7,
+        "七新"
+      ]
+    ]
+  },
+  {},
+  {
+    "columns": [
+      "id",
+      "content"
+    ],
+    "rows": [
+      [
+        7,
+        "七"
+      ]
+    ]
+  },
+  {},
+  {
+    "affected_rows": 1
+  },
+  {
+    "affected_rows": 1
+  },
+  {},
+  {
+    "columns": [
+      "id",
+      "content"
+    ],
+    "rows": [
+      [
+        7,
+        "七再"
+      ]
+    ]
+  }
+]

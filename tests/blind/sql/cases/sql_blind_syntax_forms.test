@@ -1,0 +1,12 @@
+CREATE TABLE Docs (id BIGINT PRIMARY KEY, Content VARCHAR(16));
+   insert    into    Docs   values   (1, 'a');
+SELECT id FROM Docs WHERE id = 1;
+SELECT * FROM Docs WHERE ID = 1;
+SELECT Content AS c FROM Docs WHERE id = 1;
+select id from Docs order by id limit 1   ;
+INSERT INTO Docs VALUES (2, 'b'); SELECT id FROM Docs;
+SELECT id FROM Docs ORDER BY id;
+SELECT COUNT(*) FROM Docs;
+INSERT INTO Docs VALUES (3, 'c');
+SELECT * FROM Docs WHERE ID > 1 ORDER BY id;
+SELECT Content AS c, id AS k FROM Docs ORDER BY k;

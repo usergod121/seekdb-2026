@@ -1,0 +1,14 @@
+CREATE TABLE docs (id BIGINT PRIMARY KEY, category VARCHAR(8), content VARCHAR(16), embedding VECTOR(2));
+INSERT INTO docs VALUES (1, 'a', '一', '[0,0]'), (2, 'a', '二', '[1,0]');
+BEGIN;
+UPDATE docs SET content = '一改' WHERE id = 1;
+CREATE TABLE tags (id BIGINT PRIMARY KEY, tag VARCHAR(8));
+INSERT INTO tags VALUES (1, '独立');
+SELECT id, tag FROM tags ORDER BY id;
+CREATE VECTOR INDEX docs_vec ON docs(embedding);
+COMMIT;
+SELECT id, content FROM docs ORDER BY id;
+--restart
+SELECT id, content FROM docs ORDER BY id;
+SELECT id, tag FROM tags ORDER BY id;
+SELECT id, L2_DISTANCE(embedding, '[0,0]') AS distance FROM docs ORDER BY distance LIMIT 2;

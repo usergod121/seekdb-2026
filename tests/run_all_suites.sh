@@ -7,6 +7,10 @@ for f in boundary_suite.py boundary_suite2.py adversarial_protocol.py probe_synt
   out=$(timeout 1200 python3 -u "tests/$f" 2>/dev/null | grep -E 'passed|problem' | tail -1)
   echo "${out:-no summary}"
 done
+# blind corpora: cases designed from the task statement alone, without looking at the engine
+printf '%-26s ' "blind corpora"
+out=$(bash tests/run_blind_corpora.sh 2>/dev/null | tail -1)
+echo "${out:-no summary}"
 # randomised differential testing against an independent model of the spec
 printf '%-26s ' "fuzz_differential (6 seeds)"
 out=$(bash tests/run_fuzz_seeds.sh 1 6 120 2>/dev/null | tail -1)

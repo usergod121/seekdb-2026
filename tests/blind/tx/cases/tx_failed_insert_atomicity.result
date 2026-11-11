@@ -1,0 +1,82 @@
+[
+  {},
+  {
+    "affected_rows": 2
+  },
+  {},
+  {
+    "affected_rows": 1
+  },
+  {
+    "error": "duplicate_key"
+  },
+  {
+    "affected_rows": 1
+  },
+  {
+    "columns": [
+      "id",
+      "content"
+    ],
+    "rows": [
+      [
+        1,
+        "保留"
+      ],
+      [
+        2,
+        "二"
+      ],
+      [
+        4,
+        "四"
+      ]
+    ]
+  },
+  {},
+  {},
+  {
+    "error": "duplicate_key"
+  },
+  {},
+  {
+    "columns": [
+      "id",
+      "content"
+    ],
+    "rows": [
+      [
+        1,
+        "保留"
+      ],
+      [
+        2,
+        "二"
+      ],
+      [
+        4,
+        "四"
+      ]
+    ]
+  },
+  {
+    "columns": [
+      "id",
+      "content"
+    ],
+    "rows": [
+      [
+        1,
+        "保留"
+      ],
+      [
+        2,
+        "二"
+      ],
+      [
+        4,
+        "四"
+      ]
+    ]
+  }
+]

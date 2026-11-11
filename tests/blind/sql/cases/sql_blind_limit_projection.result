@@ -1,0 +1,104 @@
+[
+  {},
+  {
+    "affected_rows": 3
+  },
+  {
+    "columns": [
+      "id"
+    ],
+    "rows": []
+  },
+  {
+    "columns": [
+      "id"
+    ],
+    "rows": [
+      [
+        1
+      ],
+      [
+        2
+      ],
+      [
+        3
+      ]
+    ]
+  },
+  {
+    "columns": [
+      "id"
+    ],
+    "rows": []
+  },
+  {
+    "columns": [
+      "id"
+    ],
+    "rows": []
+  },
+  {
+    "columns": [
+      "k",
+      "label"
+    ],
+    "rows": [
+      [
+        1,
+        "x"
+      ]
+    ]
+  },
+  {
+    "columns": [
+      "id",
+      "a",
+      "b"
+    ],
+    "rows": [
+      [
+        2,
+        20,
+        "y"
+      ]
+    ]
+  },
+  {
+    "columns": [
+      "b",
+      "id"
+    ],
+    "rows": [
+      [
+        "x",
+        1
+      ]
+    ]
+  },
+  {
+    "columns": [
+      "id"
+    ],
+    "rows": [
+      [
+        3
+      ]
+    ]
+  },
+  {
+    "columns": [
+      "id"
+    ],
+    "rows": []
+  },
+  {
+    "columns": [
+      "id"
+    ],
+    "rows": [
+      [
+        2
+      ]
+    ]
+  }
+]

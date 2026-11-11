@@ -1,0 +1,157 @@
+[
+  {},
+  {},
+  {},
+  {
+    "affected_rows": 1
+  },
+  {
+    "affected_rows": 1
+  },
+  {
+    "affected_rows": 1
+  },
+  {
+    "affected_rows": 1
+  },
+  {
+    "affected_rows": 1
+  },
+  {
+    "affected_rows": 1
+  },
+  {
+    "affected_rows": 1
+  },
+  {
+    "affected_rows": 1
+  },
+  {
+    "affected_rows": 1
+  },
+  {
+    "affected_rows": 1
+  },
+  {
+    "affected_rows": 1
+  },
+  {},
+  {
+    "affected_rows": 1
+  },
+  {
+    "affected_rows": 1
+  },
+  {
+    "columns": ["id", "owner", "amount"],
+    "rows": [
+      [1, "amy", 150],
+      [3, "cid", 300],
+      [4, "dee", 400]
+    ]
+  },
+  {
+    "columns": ["id", "acc_id", "kind"],
+    "rows": [
+      [1, 1, "open"],
+      [2, 2, "open"],
+      [3, 1, "deposit"],
+      [4, 3, "open"],
+      [5, 2, "orphan"],
+      [6, 4, "pending"]
+    ]
+  },
+  {},
+  {
+    "columns": ["id", "owner", "amount"],
+    "rows": [
+      [1, "amy", 150],
+      [3, "cid", 300]
+    ]
+  },
+  {
+    "columns": ["id", "acc_id", "kind"],
+    "rows": [
+      [1, 1, "open"],
+      [2, 2, "open"],
+      [3, 1, "deposit"],
+      [4, 3, "open"],
+      [5, 2, "orphan"]
+    ]
+  },
+  {},
+  {
+    "affected_rows": 1
+  },
+  {
+    "affected_rows": 1
+  },
+  {},
+  {
+    "columns": ["id", "owner", "amount"],
+    "rows": [
+      [1, "amy", 150],
+      [3, "cid", 999]
+    ]
+  },
+  {
+    "columns": ["id", "acc_id", "kind"],
+    "rows": [
+      [1, 1, "open"],
+      [2, 2, "open"],
+      [3, 1, "deposit"],
+      [4, 3, "open"],
+      [5, 2, "orphan"],
+      [7, 3, "close"]
+    ]
+  },
+  {
+    "columns": ["id", "owner", "amount"],
+    "rows": [
+      [1, "amy", 150],
+      [3, "cid", 999]
+    ]
+  },
+  {
+    "columns": ["id"],
+    "rows": [
+      [4],
+      [7]
+    ]
+  },
+  {
+    "columns": ["id"],
+    "rows": [
+      [1],
+      [3]
+    ]
+  },
+  {
+    "columns": ["id"],
+    "rows": []
+  },
+  {
+    "columns": ["id", "owner", "amount"],
+    "rows": [
+      [1, "amy", 150],
+      [3, "cid", 999]
+    ]
+  },
+  {
+    "columns": ["id", "acc_id", "kind"],
+    "rows": [
+      [1, 1, "open"],
+      [2, 2, "open"],
+      [3, 1, "deposit"],
+      [4, 3, "open"],
+      [5, 2, "orphan"],
+      [7, 3, "close"]
+    ]
+  },
+  {
+    "columns": ["id", "d"],
+    "rows": [
+      [3, "tri"]
+    ]
+  }
+]

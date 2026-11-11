@@ -1,0 +1,37 @@
+CREATE TABLE acc (id BIGINT PRIMARY KEY, owner VARCHAR(8), amount BIGINT);
+CREATE TABLE events (id BIGINT PRIMARY KEY, acc_id BIGINT, kind VARCHAR(8));
+CREATE TABLE iso_marker (id BIGINT PRIMARY KEY, d VARCHAR(8));
+INSERT INTO iso_marker VALUES (3, 'tri');
+INSERT INTO acc VALUES (1,'amy',100);
+INSERT INTO acc VALUES (2,'bob',200);
+INSERT INTO events VALUES (1,1,'open');
+INSERT INTO events VALUES (2,2,'open');
+UPDATE acc SET amount = 150 WHERE id = 1;
+INSERT INTO events VALUES (3,1,'deposit');
+INSERT INTO acc VALUES (3,'cid',300);
+INSERT INTO events VALUES (4,3,'open');
+DELETE FROM acc WHERE id = 2;
+INSERT INTO events VALUES (5,2,'orphan');
+BEGIN;
+INSERT INTO acc VALUES (4,'dee',400);
+INSERT INTO events VALUES (6,4,'pending');
+SELECT id, owner, amount FROM acc ORDER BY id;
+SELECT id, acc_id, kind FROM events ORDER BY id;
+ROLLBACK;
+SELECT id, owner, amount FROM acc ORDER BY id;
+SELECT id, acc_id, kind FROM events ORDER BY id;
+BEGIN;
+UPDATE acc SET amount = 999 WHERE id = 3;
+INSERT INTO events VALUES (7,3,'close');
+COMMIT;
+SELECT id, owner, amount FROM acc ORDER BY id;
+SELECT id, acc_id, kind FROM events ORDER BY id;
+--restart
+SELECT id, owner, amount FROM acc ORDER BY id;
+SELECT id FROM events WHERE acc_id = 3 ORDER BY id;
+SELECT id FROM acc WHERE amount > 140 AND id < 5 ORDER BY id;
+SELECT id FROM acc WHERE amount >= 1000;
+--restart
+SELECT id, owner, amount FROM acc ORDER BY id;
+SELECT id, acc_id, kind FROM events ORDER BY id;
+SELECT id, d FROM iso_marker;

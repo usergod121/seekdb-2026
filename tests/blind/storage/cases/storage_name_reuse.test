@@ -1,0 +1,10 @@
+CREATE TABLE reuse (id BIGINT PRIMARY KEY, note VARCHAR(16));
+INSERT INTO reuse VALUES (1,'one'),(2,'two');
+--restart
+SELECT id, note FROM reuse ORDER BY id;
+CREATE TABLE reuse (id BIGINT PRIMARY KEY, other VARCHAR(4));
+SELECT id, note FROM reuse ORDER BY id;
+INSERT INTO reuse VALUES (3,'three');
+SELECT id, note FROM reuse ORDER BY id;
+--restart
+SELECT id, note FROM reuse ORDER BY id;

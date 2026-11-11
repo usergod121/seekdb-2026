@@ -1,0 +1,90 @@
+[
+  {},
+  {
+    "affected_rows": 1
+  },
+  {
+    "affected_rows": 1
+  },
+  {
+    "affected_rows": 1
+  },
+  {
+    "affected_rows": 1
+  },
+  {
+    "affected_rows": 1
+  },
+  {
+    "columns": [
+      "id"
+    ],
+    "rows": [
+      [
+        1
+      ],
+      [
+        2
+      ],
+      [
+        3
+      ],
+      [
+        4
+      ],
+      [
+        5
+      ]
+    ]
+  },
+  {
+    "columns": [
+      "s"
+    ],
+    "rows": [
+      [
+        "it's"
+      ]
+    ]
+  },
+  {
+    "columns": [
+      "s"
+    ],
+    "rows": [
+      [
+        "a;b"
+      ]
+    ]
+  },
+  {
+    "columns": [
+      "s"
+    ],
+    "rows": [
+      [
+        "quote' and 'q'"
+      ]
+    ]
+  },
+  {
+    "columns": [
+      "id"
+    ],
+    "rows": [
+      [
+        4
+      ]
+    ]
+  },
+  {
+    "columns": [
+      "id"
+    ],
+    "rows": [
+      [
+        5
+      ]
+    ]
+  }
+]

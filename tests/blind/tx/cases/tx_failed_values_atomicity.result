@@ -1,0 +1,120 @@
+[
+  {},
+  {
+    "affected_rows": 3
+  },
+  {},
+  {
+    "affected_rows": 1
+  },
+  {
+    "error": "dimension_mismatch"
+  },
+  {
+    "error": "dimension_mismatch"
+  },
+  {
+    "error": "type_mismatch"
+  },
+  {
+    "columns": [
+      "id",
+      "content"
+    ],
+    "rows": [
+      [
+        1,
+        "一"
+      ],
+      [
+        2,
+        "二"
+      ],
+      [
+        3,
+        "改"
+      ]
+    ]
+  },
+  {},
+  {
+    "columns": [
+      "id",
+      "content"
+    ],
+    "rows": [
+      [
+        1,
+        "一"
+      ],
+      [
+        2,
+        "二"
+      ],
+      [
+        3,
+        "改"
+      ]
+    ]
+  },
+  {
+    "columns": [
+      "id",
+      "distance"
+    ],
+    "rows": [
+      [
+        1,
+        0.0
+      ],
+      [
+        2,
+        1.0
+      ],
+      [
+        3,
+        2.0
+      ]
+    ]
+  },
+  {
+    "columns": [
+      "id",
+      "content"
+    ],
+    "rows": [
+      [
+        1,
+        "一"
+      ],
+      [
+        2,
+        "二"
+      ],
+      [
+        3,
+        "改"
+      ]
+    ]
+  },
+  {
+    "columns": [
+      "id",
+      "distance"
+    ],
+    "rows": [
+      [
+        1,
+        0.0
+      ],
+      [
+        2,
+        1.0
+      ],
+      [
+        3,
+        2.0
+      ]
+    ]
+  }
+]

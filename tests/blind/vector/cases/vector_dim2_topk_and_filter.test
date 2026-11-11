@@ -1,0 +1,10 @@
+CREATE TABLE d2 (id BIGINT PRIMARY KEY, category VARCHAR(8), embedding VECTOR(2));
+INSERT INTO d2 VALUES (1,'skip','[0,0]'),(2,'skip','[-3,-4]'),(3,'keep','[3,4]'),(4,'keep','[6,8]'),(5,'keep','[-3,-4]'),(6,'other','[1,0]');
+SELECT id, L2_DISTANCE(embedding, '[0,0]') AS d FROM d2 WHERE category = 'keep' ORDER BY d LIMIT 2;
+SELECT id, L2_DISTANCE(embedding, '[0,0]') AS d FROM d2 WHERE category = 'keep' ORDER BY d LIMIT 1;
+SELECT id, L2_DISTANCE(embedding, '[0,0]') AS d FROM d2 WHERE category = 'keep' ORDER BY d LIMIT 10;
+SELECT id, L2_DISTANCE(embedding, '[0,0]') AS d FROM d2 ORDER BY d LIMIT 2;
+SELECT id, L2_DISTANCE(embedding, '[0,0]') AS d FROM d2 ORDER BY d LIMIT 10;
+SELECT id, L2_DISTANCE(embedding, '[0,0]') AS d FROM d2 WHERE category = 'keep' AND id > 1 AND id < 5 ORDER BY d LIMIT 5;
+SELECT id, L2_DISTANCE(embedding, '[0,0]') AS d FROM d2 WHERE category = 'absent' ORDER BY d LIMIT 3;
+SELECT id, L2_DISTANCE(embedding, '[0,0]') AS d FROM d2 WHERE category = 'other' ORDER BY d LIMIT 3;

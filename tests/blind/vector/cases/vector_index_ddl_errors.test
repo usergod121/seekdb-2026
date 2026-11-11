@@ -1,0 +1,10 @@
+CREATE TABLE ie (id BIGINT PRIMARY KEY, category VARCHAR(8), embedding VECTOR(2));
+CREATE VECTOR INDEX ie_emb ON no_such_table(embedding);
+CREATE VECTOR INDEX ie_emb ON ie(no_such_column);
+CREATE VECTOR INDEX ie_emb ON ie(category);
+CREATE VECTOR INDEX ie_emb ON ie(embedding);
+INSERT INTO ie VALUES (1,'a','[0,1]'),(2,'a','[3,4]');
+SELECT id, L2_DISTANCE(embedding, '[0,0]') AS d FROM ie WHERE category = 'a' ORDER BY d LIMIT 5;
+--restart
+SELECT id, L2_DISTANCE(embedding, '[0,0]') AS d FROM ie WHERE category = 'a' ORDER BY d LIMIT 5;
+CREATE VECTOR INDEX ie_emb ON ie(embedding);

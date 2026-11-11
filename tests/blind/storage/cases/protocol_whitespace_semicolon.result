@@ -1,0 +1,64 @@
+[
+  {},
+  {
+    "affected_rows": 1
+  },
+  {
+    "affected_rows": 1
+  },
+  {
+    "affected_rows": 1
+  },
+  {
+    "columns": ["id", "label"],
+    "rows": [
+      [1, "a;b;c"],
+      [2, "x ; y"],
+      [3, "p;q"]
+    ]
+  },
+  {
+    "columns": ["id", "label"],
+    "rows": [
+      [2, "x ; y"]
+    ]
+  },
+  {
+    "affected_rows": 1
+  },
+  {
+    "columns": ["id", "flag"],
+    "rows": [
+      [1, 99]
+    ]
+  },
+  {
+    "columns": ["id"],
+    "rows": [
+      [1]
+    ]
+  },
+  {
+    "affected_rows": 1
+  },
+  {
+    "columns": ["id", "label"],
+    "rows": [
+      [1, "a;b;c"],
+      [2, "x ; y"]
+    ]
+  },
+  {
+    "columns": ["id", "label"],
+    "rows": [
+      [1, "a;b;c"],
+      [2, "x ; y"]
+    ]
+  },
+  {
+    "columns": ["id"],
+    "rows": [
+      [2]
+    ]
+  }
+]

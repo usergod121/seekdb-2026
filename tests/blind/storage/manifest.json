@@ -1,0 +1,76 @@
+{
+  "version": "blind-storage-v1",
+  "scope": "blind",
+  "cases": [
+    {
+      "id": "storage_many_tables_restart",
+      "group": "storage",
+      "test": "cases/storage_many_tables_restart.test",
+      "result": "cases/storage_many_tables_restart.result",
+      "statements": 42
+    },
+    {
+      "id": "storage_bulk_rows_txn",
+      "group": "storage",
+      "test": "cases/storage_bulk_rows_txn.test",
+      "result": "cases/storage_bulk_rows_txn.result",
+      "statements": 197
+    },
+    {
+      "id": "storage_wide_varchar",
+      "group": "storage",
+      "test": "cases/storage_wide_varchar.test",
+      "result": "cases/storage_wide_varchar.result",
+      "statements": 24
+    },
+    {
+      "id": "storage_vector_2000x64",
+      "group": "storage",
+      "test": "cases/storage_vector_2000x64.test",
+      "result": "cases/storage_vector_2000x64.result",
+      "statements": 77
+    },
+    {
+      "id": "storage_interleaved_two_tables",
+      "group": "storage",
+      "test": "cases/storage_interleaved_two_tables.test",
+      "result": "cases/storage_interleaved_two_tables.result",
+      "statements": 35
+    },
+    {
+      "id": "storage_recreate_cycles",
+      "group": "storage",
+      "test": "cases/storage_recreate_cycles.test",
+      "result": "cases/storage_recreate_cycles.result",
+      "statements": 16
+    },
+    {
+      "id": "storage_name_reuse",
+      "group": "storage",
+      "test": "cases/storage_name_reuse.test",
+      "result": "cases/storage_name_reuse.result",
+      "statements": 8
+    },
+    {
+      "id": "storage_large_result",
+      "group": "storage",
+      "test": "cases/storage_large_result.test",
+      "result": "cases/storage_large_result.result",
+      "statements": 44
+    },
+    {
+      "id": "protocol_multi_statement",
+      "group": "storage",
+      "test": "cases/protocol_multi_statement.test",
+      "result": "cases/protocol_multi_statement.result",
+      "statements": 11
+    },
+    {
+      "id": "protocol_whitespace_semicolon",
+      "group": "storage",
+      "test": "cases/protocol_whitespace_semicolon.test",
+      "result": "cases/protocol_whitespace_semicolon.result",
+      "statements": 13
+    }
+  ]
+}
