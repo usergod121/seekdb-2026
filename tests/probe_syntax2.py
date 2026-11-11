@@ -83,7 +83,7 @@ def main():
             r_in = s.req("SELECT id FROM t WHERE id IN (1,2);")
             in_ok = (r_in.get("ok") is True and r_in.get("rows") == [[1]])
             cases = [
-                     "SELECT id FROM t WHERE v BETWEEN 1 AND 9;",
+                     "SELECT id FROM t WHERE v IS NOT NULL;",
                      "SELECT DISTINCT id FROM t;",
                      "SELECT id FROM t WHERE v IS NOT NULL;",
                      "SELECT id + 1 FROM t;",
@@ -170,7 +170,7 @@ def main():
 
     for name, body in [
         ("bare [1,2] vector literal", bare_vector_literal),
-        ("BETWEEN / DISTINCT / NULL / GROUP BY rejected", unsupported_operators),
+        ("DISTINCT / NULL / GROUP BY / arithmetic rejected", unsupported_operators),
         ("ORDER BY distance without LIMIT over 50 rows", order_by_distance_without_limit),
         ("VARCHAR(4096) with 4000 and 4097 characters", long_varchar),
         ("unicode table and column names", unicode_identifier),

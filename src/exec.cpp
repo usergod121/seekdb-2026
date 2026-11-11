@@ -180,6 +180,52 @@ bool vector_from_expr(const Expr& e, std::vector<float>* out) {
   return false;
 }
 
+// MySQL LIKE with '%' and '_' wildcards; a backslash escapes the following character.
+bool like_match(const std::string& text, const std::string& pattern) {
+  size_t t = 0;
+  size_t p = 0;
+  size_t star_p = std::string::npos;
+  size_t star_t = 0;
+  while (t < text.size()) {
+    if (p < pattern.size() && pattern[p] == '\\' && p + 1 < pattern.size()) {
+      if (text[t] != pattern[p + 1]) return false;
+      t += 1;
+      p += 2;
+      continue;
+    }
+    if (p < pattern.size() && (pattern[p] == '_' || pattern[p] == text[t])) {
+      t += 1;
+      p += 1;
+      continue;
+    }
+    if (p < pattern.size() && pattern[p] == '%') {
+      star_p = p;
+      star_t = t;
+      p += 1;
+      continue;
+    }
+    if (star_p != std::string::npos) {
+      p = star_p + 1;
+      star_t += 1;
+      t = star_t;
+      continue;
+    }
+    return false;
+  }
+  while (p < pattern.size() && pattern[p] == '%') ++p;
+  return p == pattern.size();
+}
+
+// Three-way comparison used by BETWEEN: numbers compare numerically, text by code point.
+int compare_for_between(const Value& a, const Value& b) {
+  if (a.type == ColType::BigInt && b.type == ColType::BigInt) {
+    return (a.i < b.i) ? -1 : (a.i > b.i ? 1 : 0);
+  }
+  const std::string left = (a.type == ColType::BigInt) ? std::to_string(a.i) : a.s;
+  const std::string right = (b.type == ColType::BigInt) ? std::to_string(b.i) : b.s;
+  return cmp_str(left, right);
+}
+
 bool is_l2(const Expr& e) { return e.kind == ExprKind::Func && equals_ci(e.name, "L2_DISTANCE"); }
 
 // L2 distance between the stored vector of the row and the query vector.
@@ -308,6 +354,31 @@ bool eval_bool(const Ctx& ctx, const Expr& e, bool* out, std::string* err) {
       }
     }
     *out = false;
+    return true;
+  }
+  if (equals_ci(e.name, "LIKE")) {
+    // MySQL's two wildcards: '%' matches any run (including none), '_' matches exactly one character.
+    // The pattern is compared as text against the cell, with a backslash escaping the next character.
+    Value left;
+    Value right;
+    if (!eval_scalar(ctx, *e.args[0], &left, nullptr, err)) return false;
+    if (!eval_scalar(ctx, *e.args[1], &right, nullptr, err)) return false;
+    const std::string text = (left.type == ColType::BigInt) ? std::to_string(left.i) : left.s;
+    const std::string pattern = (right.type == ColType::BigInt) ? std::to_string(right.i) : right.s;
+    *out = like_match(text, pattern);
+    return true;
+  }
+  if (equals_ci(e.name, "BETWEEN")) {
+    // Inclusive on both ends, like MySQL: low <= value <= high.
+    Value value;
+    Value low;
+    Value high;
+    if (!eval_scalar(ctx, *e.args[0], &value, nullptr, err)) return false;
+    if (!eval_scalar(ctx, *e.args[1], &low, nullptr, err)) return false;
+    if (!eval_scalar(ctx, *e.args[2], &high, nullptr, err)) return false;
+    const int lo = compare_for_between(value, low);
+    const int hi = compare_for_between(value, high);
+    *out = (lo >= 0 && hi <= 0);
     return true;
   }
   // Fast path: a comparison between a column and a literal is the shape filters take in the graded

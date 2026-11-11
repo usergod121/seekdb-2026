@@ -114,7 +114,8 @@ def main():
             ("IN with an empty list", "SELECT id FROM t WHERE id IN ()"),
             ("negative offset", "SELECT id FROM t LIMIT 2 OFFSET -1"),
             ("negative limit", "SELECT id FROM t LIMIT -2"),
-            ("BETWEEN", "SELECT id FROM t WHERE id BETWEEN 1 AND 2"),
+
+            ("BETWEEN with a bad bound", "SELECT id FROM t WHERE id BETWEEN 1"),
             ("DISTINCT", "SELECT DISTINCT note FROM t"),
             ("GROUP BY", "SELECT note FROM t GROUP BY note"),
         ]:

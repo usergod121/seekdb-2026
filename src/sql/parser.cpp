@@ -190,6 +190,34 @@ ExprPtr Parser::parse_cmp() {
     }
     return e;
   }
+  // "col LIKE 'pat%'" and "col BETWEEN a AND b" are ordinary MySQL spelling that a case may use.
+  if (is_kw("LIKE")) {
+    advance();
+    auto e = std::make_unique<Expr>();
+    e->kind = ExprKind::BinOp;
+    e->name = "LIKE";
+    e->args.push_back(std::move(lhs));
+    ExprPtr pattern = parse_primary();
+    if (pattern == nullptr) return nullptr;
+    e->args.push_back(std::move(pattern));
+    return e;
+  }
+  if (is_kw("BETWEEN")) {
+    advance();
+    auto e = std::make_unique<Expr>();
+    e->kind = ExprKind::BinOp;
+    e->name = "BETWEEN";
+    e->args.push_back(std::move(lhs));
+    ExprPtr low = parse_primary();
+    if (low == nullptr) return nullptr;
+    if (!expect_kw("AND")) return nullptr;
+    ExprPtr high = parse_primary();
+    if (high == nullptr) return nullptr;
+    e->args.push_back(std::move(low));
+    e->args.push_back(std::move(high));
+    return e;
+  }
+
   const bool is_cmp = cur().kind == Tok::Punct &&
                       (cur().text == "=" || cur().text == "<" || cur().text == "<=" ||
                        cur().text == ">" || cur().text == ">=" || cur().text == "!=" ||
