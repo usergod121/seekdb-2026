@@ -43,6 +43,9 @@ __attribute__((target("avx2,fma"))) double l2_avx2(const float* a, const float* 
     const float diff = a[d] - b[d];
     sum += diff * diff;
   }
+  // A float accumulator overflows once the components reach ~1e19; the distance itself is still a
+  // perfectly good double, so recompute that row in double instead of returning infinity.
+  if (!std::isfinite(sum)) return l2_scalar(a, b, dims);
   return std::sqrt(static_cast<double>(sum));
 }
 #endif

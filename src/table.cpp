@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 
+#include <cmath>
 #include <cstring>
 
 #include "sql/lexer.h"
@@ -254,6 +255,16 @@ Err Table::build_cache() {
       row.vec.clear();   // the payload lives in cache_vecs; Row::vec is not used on the cached path
     }
     cache_rows.push_back(row);
+  }
+  // Squared components above ~1e38 overflow a float32 accumulator, so a table holding values of that
+  // magnitude must be scanned in double.
+  cache_needs_double = false;
+  for (float value : cache_vecs) {
+    const float magnitude = std::fabs(value);
+    if (magnitude > 1e17f) {
+      cache_needs_double = true;
+      break;
+    }
   }
   cache_valid = true;
   // Scans are served from this cache now, so the file pages the decode pass pulled in are released:

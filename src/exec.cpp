@@ -1010,9 +1010,30 @@ Result Database::exec_select(const Stmt& st) {
     }
   } offset_trim{&r, k_offset};
 
+  // Extreme float32 components overflow the float accumulator the batched kernels use, so those rows
+  // are computed in double instead (the generic path below does exactly that).
+  bool magnitudes_safe = true;
+  if (cached && t->cache_needs_double) magnitudes_safe = false;
+  for (size_t i = 0; magnitudes_safe && i < order_l2.size(); ++i) {
+    for (float value : order_l2[i].q) {
+      if (std::fabs(value) > 1e17f) {
+        magnitudes_safe = false;
+        break;
+      }
+    }
+  }
+  for (size_t i = 0; magnitudes_safe && i < proj_l2.size(); ++i) {
+    for (float value : proj_l2[i].q) {
+      if (std::fabs(value) > 1e17f) {
+        magnitudes_safe = false;
+        break;
+      }
+    }
+  }
+
   // ---- fast path: one ascending L2 ordering with a LIMIT -> bounded heap of size K ----
-  if (cached && st.order_by.size() == 1 && !order_l2[0].q.empty() && st.order_by[0].asc &&
-      have_limit) {
+  if (magnitudes_safe && cached && st.order_by.size() == 1 && !order_l2[0].q.empty() &&
+      st.order_by[0].asc && have_limit) {
     const size_t k = static_cast<size_t>(k_fetch);
     std::vector<HeapItem> heap;
     heap.reserve(k + 1);

@@ -43,7 +43,10 @@ struct Table {
   // vectorise. When it does not fit, the paged path is used instead and correctness is unchanged.
   std::vector<Row> cache_rows;
   std::vector<int64_t> cache_pks;
-  std::vector<float> cache_vecs;    // flat: row i occupies [i*dim(), (i+1)*dim())
+  std::vector<float> cache_vecs;
+  // True when a component is large enough that a float32 accumulator could overflow
+  // (the batched kernels then hand those rows to the double path).
+  bool cache_needs_double = false;    // flat: row i occupies [i*dim(), (i+1)*dim())
   // Columnar copies of the scalar columns, so a WHERE clause reads a sequential array instead of
   // following one heap pointer per row through Row::vals. cache_str_off[c] has rows + 1 entries.
   std::vector<std::vector<int64_t>> cache_int_cols;

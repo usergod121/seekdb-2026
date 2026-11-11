@@ -54,10 +54,46 @@ bool tokenize(const std::string& sql, std::vector<Token>* out, std::string* err)
     }
     Token t;
     t.pos = i;
-    if (is_digit(c) || (c == '-' && i + 1 < n && is_digit(static_cast<unsigned char>(sql[i + 1])))) {
-      // number: integer or float (also used inside vector literals)
+    if (c == '`') {
+      // `quoted identifier`, the spelling MySQL tools emit; a doubled ` inside stands for one backtick
+      std::string name;
+      size_t j = i + 1;
+      bool closed = false;
+      while (j < n) {
+        if (sql[j] == '`') {
+          if (j + 1 < n && sql[j + 1] == '`') {
+            name.push_back('`');
+            j += 2;
+            continue;
+          }
+          ++j;
+          closed = true;
+          break;
+        }
+        name.push_back(sql[j]);
+        ++j;
+      }
+      if (!closed) {
+        *err = "unterminated backtick identifier";
+        return false;
+      }
+      if (name.empty()) {
+        *err = "empty backtick identifier";
+        return false;
+      }
+      t.kind = Tok::Ident;
+      t.text = name;
+      i = j;
+      out->push_back(std::move(t));
+      continue;
+    }
+    if (is_digit(c) ||
+        ((c == '-' || c == '+') && i + 1 < n &&
+         is_digit(static_cast<unsigned char>(sql[i + 1])))) {
+      // number: integer or float (also used inside vector literals); a leading '+' is unary plus
       size_t j = i;
-      if (sql[j] == '-') ++j;
+      const bool negative = (sql[j] == '-');
+      if (sql[j] == '-' || sql[j] == '+') ++j;
       bool is_float = false;
       while (j < n && (is_digit(static_cast<unsigned char>(sql[j])) || sql[j] == '.' ||
                        sql[j] == 'e' || sql[j] == 'E' ||
@@ -69,7 +105,10 @@ bool tokenize(const std::string& sql, std::vector<Token>* out, std::string* err)
       t.text = sql.substr(i, j - i);
       if (is_float) {
         t.kind = Tok::Float;
-        t.f = std::strtod(t.text.c_str(), nullptr);
+        // strip a leading '+' so strtod sees a plain number
+        const char* digits = (sql[i] == '+') ? t.text.c_str() + 1 : t.text.c_str();
+        t.f = std::strtod(digits, nullptr);
+        if (negative) t.f = -t.f;
       } else {
         t.kind = Tok::Integer;
         errno = 0;
