@@ -785,13 +785,36 @@ Result Database::exec_select(const Stmt& st) {
     r.message = "table doesn't exist: " + st.table;
     return r;
   }
+  // Normalise the select list: a '*' entry stands for every column of the table in table order, and
+  // "_" prefixes nothing else here. The expanded expressions are owned locally so the rest of the
+  // projection code does not need to know whether a '*' was written.
+  std::vector<ExprPtr> owned;
+  std::vector<const Expr*> projections;
+  std::vector<std::string> aliases;
+  for (size_t i = 0; i < st.projections.size(); ++i) {
+    const Expr& e = *st.projections[i];
+    const std::string alias = (i < st.aliases.size()) ? st.aliases[i] : std::string();
+    if (e.kind == ExprKind::Column && e.name == "*") {
+      for (const Column& c : t->columns) {
+        auto column = std::make_unique<Expr>();
+        column->kind = ExprKind::Column;
+        column->name = c.name;
+        projections.push_back(column.get());
+        owned.push_back(std::move(column));
+        aliases.push_back(std::string());
+      }
+      continue;
+    }
+    projections.push_back(&e);
+    aliases.push_back(alias);
+  }
   if (st.projections.empty()) {
     for (const Column& c : t->columns) r.col_names.push_back(c.name);
   } else {
-    for (size_t i = 0; i < st.projections.size(); ++i) {
-      const Expr& e = *st.projections[i];
-      const bool has_alias = (i < st.aliases.size() && !st.aliases[i].empty());
-      r.col_names.push_back(has_alias ? st.aliases[i] : e.name);
+    for (size_t i = 0; i < projections.size(); ++i) {
+      const Expr& e = *projections[i];
+      const bool has_alias = (i < aliases.size() && !aliases[i].empty());
+      r.col_names.push_back(has_alias ? aliases[i] : e.name);
     }
   }
 
@@ -803,9 +826,9 @@ Result Database::exec_select(const Stmt& st) {
   for (size_t i = 0; i < st.order_by.size(); ++i) {
     const Expr* oe = st.order_by[i].expr.get();
     if (oe->kind == ExprKind::Column) {
-      for (size_t p = 0; p < st.projections.size() && p < st.aliases.size(); ++p) {
-        if (!st.aliases[p].empty() && st.aliases[p] == oe->name) {
-          oe = st.projections[p].get();
+      for (size_t p = 0; p < projections.size() && p < aliases.size(); ++p) {
+        if (!aliases[p].empty() && aliases[p] == oe->name) {
+          oe = projections[p];
           break;
         }
       }
@@ -829,7 +852,7 @@ Result Database::exec_select(const Stmt& st) {
   }
 
   std::vector<L2Spec> order_l2(st.order_by.size());
-  std::vector<L2Spec> proj_l2(st.projections.size());
+  std::vector<L2Spec> proj_l2(projections.size());
   // The same literal commonly appears twice in one statement (once in the projection, once in ORDER
   // BY), so the parse result is remembered for the statement's lifetime.
   std::string cached_literal;
@@ -865,14 +888,14 @@ Result Database::exec_select(const Stmt& st) {
   }
   // A projection may be the vector column itself ("SELECT id, embedding FROM docs"), which is rendered
   // as a literal the same way SELECT * renders it.
-  std::vector<char> proj_vec(st.projections.size(), 0);
-  for (size_t i = 0; i < st.projections.size(); ++i) {
-    if (!resolve_l2(*st.projections[i], &proj_l2[i])) {
+  std::vector<char> proj_vec(projections.size(), 0);
+  for (size_t i = 0; i < projections.size(); ++i) {
+    if (!resolve_l2(*projections[i], &proj_l2[i])) {
       r.err = Err::SyntaxError;
       r.message = "bad L2_DISTANCE arguments";
       return r;
     }
-    const Expr& e = *st.projections[i];
+    const Expr& e = *projections[i];
     if (e.kind == ExprKind::Column && dims > 0 &&
         t->find_column(e.name) == static_cast<int>(t->vec_col)) {
       proj_vec[i] = 1;
@@ -912,8 +935,8 @@ Result Database::exec_select(const Stmt& st) {
       }
       return true;
     }
-    for (size_t i = 0; i < st.projections.size(); ++i) {
-      const Expr& e = *st.projections[i];
+    for (size_t i = 0; i < projections.size(); ++i) {
+      const Expr& e = *projections[i];
       if (proj_vec[i]) {
         line->push_back(vec_cell(vec));
       } else if (!proj_l2[i].q.empty()) {
@@ -1247,9 +1270,13 @@ Result Database::exec_update(const Stmt& st, const bool replay) {
     }
     Rid new_rid;
     bool moved = false;
-    if (t->heap.update(rid, payload.data(), static_cast<int32_t>(payload.size()), &new_rid,
-                       &moved) != Err::Ok) {
-      r.err = Err::IoError;
+    // Report what actually went wrong: a row that is too large for a page is a value problem, not an
+    // I/O problem, and the client should be able to tell the two apart.
+    const Err urc = t->heap.update(rid, payload.data(), static_cast<int32_t>(payload.size()),
+                                   &new_rid, &moved);
+    if (urc != Err::Ok) {
+      r.err = urc;
+      r.message = "cannot store the updated row";
       return r;
     }
     t->pk_index[u.pk] = new_rid;

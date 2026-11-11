@@ -96,17 +96,20 @@ def main():
             shutil.rmtree(tmp, ignore_errors=True)
 
     def row_too_wide():
+        """A row past the 64 KiB row limit (what MySQL itself allows) must be refused cleanly."""
         tmp, data = fresh()
         try:
             s = S(data)
-            s.req("CREATE TABLE wide (id BIGINT PRIMARY KEY, a VARCHAR(4096), b VARCHAR(4096));")
-            payload = "x" * 4096   # two 4096-character columns overflow one page; 4000 each fits
-            r = s.req("INSERT INTO wide VALUES (1, '%s', '%s');" % (payload, payload))
-            # an 8000 byte row cannot fit an 8 KiB page: it must be refused, not crash or truncate
+            s.req("CREATE TABLE wide (id BIGINT PRIMARY KEY, a VARCHAR(65535), b VARCHAR(4096));")
+            small = s.req("INSERT INTO wide VALUES (1, '%s', '%s');" % ("x" * 60000, "y" * 10))
+            r = s.req("INSERT INTO wide VALUES (2, '%s', '%s');" % ("z" * 65535, "w" * 4096))
             still_alive = s.req("SELECT id FROM wide;")
             s.shutdown()
-            ok = (r.get("ok") is False and still_alive.get("ok") is True)
-            return ok, "insert=%r rows=%r" % (r, still_alive.get("rows"))
+            ok = (small.get("ok") is True and r.get("ok") is False
+                  and still_alive.get("ok") is True
+                  and [row[0] for row in (still_alive.get("rows") or [])] == [1])
+            return ok, "small=%r insert=%r rows=%r" % (
+                small.get("affected_rows"), r.get("error"), still_alive.get("rows"))
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
@@ -269,7 +272,7 @@ def main():
     for name, body in [
         ("affected_rows for a same-value UPDATE", noop_update_affected),
         ("vector column in WHERE is an error", vector_in_where),
-        ("row wider than a page is refused cleanly", row_too_wide),
+        ("row past the 64 KiB row limit is refused cleanly", row_too_wide),
         ("40 columns in one table", many_columns),
         ("VECTOR(1024) insert and distance", large_vector),
         ("empty transaction", empty_transaction),

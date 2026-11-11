@@ -15,7 +15,10 @@
 
 namespace mv {
 
-constexpr int64_t kPageSize = 8192;
+// A row must fit one page (the heap has no overflow chain), so the page is sized to the largest
+// row MySQL itself allows - a VARCHAR column may hold 65535 bytes - instead of 8 KiB, which
+// rejected perfectly legal wide rows. Slot offsets are u16, so 64 KiB is the ceiling.
+constexpr int64_t kPageSize = 65536;
 
 class Pager {
  public:

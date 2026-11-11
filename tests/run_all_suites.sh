@@ -2,11 +2,15 @@
 # Runs every local suite and prints one line per suite.
 set -u
 cd /mnt/e/mvdb || exit 1
-for f in boundary_suite.py boundary_suite2.py adversarial_protocol.py probe_syntax2.py probe_syntax3.py probe_syntax4.py probe_row_width.py probe_wal_batch.py probe_finite.py probe_schema.py probe_tx_matrix.py probe_scale_durability.py probe_crash_loop.py; do
+for f in boundary_suite.py boundary_suite2.py adversarial_protocol.py probe_syntax2.py probe_syntax3.py probe_syntax4.py probe_row_width.py probe_wal_batch.py probe_finite.py probe_schema.py probe_tx_matrix.py probe_scale_durability.py probe_crash_loop.py probe_reject_all.py probe_wide_rows.py; do
   printf '%-26s ' "$f"
   out=$(timeout 1200 python3 -u "tests/$f" 2>/dev/null | grep -E 'passed|problem' | tail -1)
   echo "${out:-no summary}"
 done
+# randomised differential testing against an independent model of the spec
+printf '%-26s ' "fuzz_differential (6 seeds)"
+out=$(bash tests/run_fuzz_seeds.sh 1 6 120 2>/dev/null | tail -1)
+echo "${out:-no summary}"
 # harder siblings of the public cases, expectations computed by an independent Python model
 printf '%-26s ' "hard_cases (modelled)"
 timeout 300 python3 -u tests/gen_hard_cases.py >/dev/null 2>&1

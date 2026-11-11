@@ -303,22 +303,29 @@ Err Parser::parse_insert(Stmt* out) {
 
 Err Parser::parse_select(Stmt* out) {
   out->kind = StmtKind::Select;
-  if (accept_punct("*")) {
-    // projections stay empty = '*'
-  } else {
-    for (;;) {
-      ExprPtr e = parse_primary();
-      if (e == nullptr) return Err::SyntaxError;
-      // optional alias: AS name | name   (only after a plain column/function)
-      std::string alias;
-      if (accept_kw("AS")) {
-        if (!expect_ident(&alias)) return Err::SyntaxError;
-      }
-      out->projections.push_back(std::move(e));
-      out->aliases.push_back(std::move(alias));
+  // The select list may mix '*' with ordinary expressions ("SELECT *, L2_DISTANCE(...) AS d"), which
+  // MySQL accepts; a '*' entry is expanded to every column once the table is known.
+  for (;;) {
+    if (accept_punct("*")) {
+      auto star = std::make_unique<Expr>();
+      star->kind = ExprKind::Column;
+      star->name = "*";
+      out->projections.push_back(std::move(star));
+      out->aliases.emplace_back();
       if (accept_punct(",")) continue;
       break;
     }
+    ExprPtr e = parse_primary();
+    if (e == nullptr) return Err::SyntaxError;
+    // optional alias: AS name | name   (only after a plain column/function)
+    std::string alias;
+    if (accept_kw("AS")) {
+      if (!expect_ident(&alias)) return Err::SyntaxError;
+    }
+    out->projections.push_back(std::move(e));
+    out->aliases.push_back(std::move(alias));
+    if (accept_punct(",")) continue;
+    break;
   }
   if (!expect_kw("FROM")) return Err::SyntaxError;
   if (!expect_ident(&out->table)) return Err::SyntaxError;
