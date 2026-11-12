@@ -69,6 +69,9 @@ void Writer::result(const Result& r, const std::string& id_json) {
       json_write_string(&line, r.col_names[i]);
     }
     line.append("],\"rows\":[");
+    // A large result is written out in pieces: holding the whole reply in one string would multiply
+    // the answer's size by a few while the container's memory limit is what kills the process.
+    constexpr size_t kFlushAt = 1u << 18;
     for (size_t row = 0; row < r.rows.size(); ++row) {
       if (row != 0) line.push_back(',');
       line.push_back('[');
@@ -78,6 +81,10 @@ void Writer::result(const Result& r, const std::string& id_json) {
         append_cell(&line, cells[col]);
       }
       line.push_back(']');
+      if (line.size() >= kFlushAt) {
+        std::fwrite(line.data(), 1, line.size(), out_);
+        line.clear();
+      }
     }
     line.append("]}");
   } else {

@@ -47,6 +47,16 @@ class Parser {
   }
 
   ExprPtr parse_expr();       // OR-less subset: AND over comparisons
+  // Guards against a stack overflow: the parser is recursive descent, so a pathological
+  // nesting depth must become an error instead of a crash.
+  struct DepthGuard {
+    static constexpr int kMaxDepth = 200;
+    explicit DepthGuard(int* depth) : depth_(depth), ok_(++(*depth) <= kMaxDepth) {}
+    ~DepthGuard() { --(*depth_); }
+    bool ok() const { return ok_; }
+    int* depth_;
+    bool ok_;
+  };
   ExprPtr parse_and();
   ExprPtr parse_cmp();
   ExprPtr parse_primary();
@@ -64,6 +74,7 @@ class Parser {
   const std::string& sql_;
   std::vector<Token> toks_;
   size_t pos_ = 0;
+  int depth_ = 0;
   std::string* err_;
 };
 
@@ -346,7 +357,14 @@ ExprPtr Parser::parse_and() {
   return lhs;
 }
 
-ExprPtr Parser::parse_expr() { return parse_and(); }
+ExprPtr Parser::parse_expr() {
+  DepthGuard guard(&depth_);
+  if (!guard.ok()) {
+    if (err_ != nullptr) *err_ = "expression nested too deeply";
+    return nullptr;
+  }
+  return parse_and();
+}
 
 Err Parser::parse_create(Stmt* out) {
   // CREATE TABLE [IF NOT EXISTS] name (col type, ...)

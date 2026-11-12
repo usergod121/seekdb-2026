@@ -45,6 +45,8 @@ class Pager {
   void release_clean_frames();
   // Writes every dirty page and fsyncs the file.
   Err flush();
+  // Bytes the page file currently occupies (a proxy for the payload the heap holds).
+  int64_t page_bytes() const { return page_count_ * kPageSize; }
 
   int64_t page_count() const { return page_count_; }
   int64_t resident_pages() const { return static_cast<int64_t>(frames_.size()); }

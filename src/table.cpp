@@ -212,7 +212,13 @@ Err Table::build_cache() {
   if (heap.live_rows(&rids) != Err::Ok) return Err::IoError;
   const int64_t dims = dim();
   const int64_t per_row = 64 + dims * static_cast<int64_t>(sizeof(float));
-  if (static_cast<int64_t>(rids.size()) * per_row > cache_budget_bytes) return Err::ValueOverflow;
+  // The estimate above only counts the fixed part of a row. Text columns live in their own buffer and
+  // can be far larger than the vector, so the payload the pages actually hold is added in: the cache
+  // stores a decoded copy of it, and a container that runs out of memory kills the process.
+  int64_t payload_bytes = 0;
+  if (pager.page_bytes() > 0) payload_bytes = pager.page_bytes();
+  const int64_t estimated = static_cast<int64_t>(rids.size()) * per_row + payload_bytes;
+  if (estimated * 2 > cache_budget_bytes) return Err::ValueOverflow;
 
   cache_rows.clear();
   cache_pks.clear();
