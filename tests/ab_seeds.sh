@@ -3,7 +3,7 @@
 # reply. Usage: ab_seeds.sh <seed_from> <seed_to> <steps>
 set -u
 cd /mnt/e/mvdb || exit 1
-GOLDEN=/mnt/e/pw/round2/golden/mvdb-golden-29c93ce
+GOLDEN=${MVDB_GOLDEN:-/mnt/e/pw/round2/golden/mvdb-golden-current}
 CANDIDATE=${MVDB_BIN:-/mnt/e/mvdb/build/minivectordb}
 from=${1:-1}
 to=${2:-4}
