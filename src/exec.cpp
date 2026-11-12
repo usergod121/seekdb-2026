@@ -824,6 +824,14 @@ bool compile_cmp(const Expr& e, const Table& t, CmpPred* out) {
   if (col_e == nullptr) return false;
   const int c = t.find_column(col_e->name);
   if (c < 0) return false;
+  // The compiled form reads the columnar arrays directly, which only exist for the type they were
+  // built for, and it applies no type coercion at all. A comparison the compiled form cannot express
+  // exactly has to go through the general evaluator: a vector column has no columnar text array (that
+  // used to be an out-of-bounds read), and "bigint_column = '1'" must coerce the same way it does in
+  // the unfiltered path instead of matching nothing.
+  const ColType type = t.columns[static_cast<size_t>(c)].type;
+  if (lit_e->kind == ExprKind::StrLit && type != ColType::Varchar) return false;
+  if (lit_e->kind == ExprKind::IntLit && type != ColType::BigInt) return false;
   out->col = c;
   out->op = flipped ? (op == 1 ? 3 : (op == 2 ? 4 : (op == 3 ? 1 : (op == 4 ? 2 : op)))) : op;
   if (lit_e->kind == ExprKind::StrLit) {
@@ -848,10 +856,14 @@ Pred compile_pred(const Expr* where, const Table& t) {
   Pred p;
   if (where == nullptr) return p;
   if (where->kind == ExprKind::BinOp && equals_ci(where->name, "AND")) {
-    if (compile_cmp(*where->args[0], t, &p.a)) {
-      p.any = true;
-      if (compile_cmp(*where->args[1], t, &p.b)) p.use_b = true;
-    }
+    // Both conjuncts have to compile, otherwise the compiled form would silently drop one of them and
+    // answer with rows the WHERE excludes. Leaving p.any false sends the query to the general
+    // evaluator, which applies the whole predicate (and reports an error for a comparison it cannot
+    // do at all).
+    if (!compile_cmp(*where->args[0], t, &p.a)) return p;
+    if (!compile_cmp(*where->args[1], t, &p.b)) return p;
+    p.any = true;
+    p.use_b = true;
     return p;
   }
   if (compile_cmp(*where, t, &p.a)) p.any = true;
@@ -907,9 +919,11 @@ struct FastKeep {
 };
 
 inline bool flat_holds(const Table& t, const CmpPred& p, const int64_t i) {
+  if (p.col < 0 || static_cast<size_t>(p.col) >= t.cache_str_off.size()) return false;
   if (p.lit_is_str) {
     const std::vector<uint32_t>& off = t.cache_str_off[static_cast<size_t>(p.col)];
     const std::vector<char>& data = t.cache_str_data[static_cast<size_t>(p.col)];
+    if (i < 0 || static_cast<size_t>(i) + 1 >= off.size()) return false;
     const uint32_t begin = off[static_cast<size_t>(i)];
     const size_t len = off[static_cast<size_t>(i) + 1] - begin;
     const std::string& lit = p.lit_s;
@@ -917,6 +931,10 @@ inline bool flat_holds(const Table& t, const CmpPred& p, const int64_t i) {
     int cmp = common == 0 ? 0 : std::memcmp(data.data() + begin, lit.data(), common);
     if (cmp == 0) cmp = (len < lit.size()) ? -1 : (len > lit.size() ? 1 : 0);
     return cmp_op_holds(p.op, cmp);
+  }
+  if (static_cast<size_t>(p.col) >= t.cache_int_cols.size()) return false;
+  if (i < 0 || static_cast<size_t>(i) >= t.cache_int_cols[static_cast<size_t>(p.col)].size()) {
+    return false;
   }
   const int64_t value = t.cache_int_cols[static_cast<size_t>(p.col)][static_cast<size_t>(i)];
   const int cmp = (value < p.lit_i) ? -1 : (value > p.lit_i ? 1 : 0);
@@ -1244,6 +1262,11 @@ Result Database::exec_select(const Stmt& st) {
           int cmp = common == 0 ? 0 : std::memcmp(data.data() + begin, lit.data(), common);
           if (cmp == 0) cmp = (len < lit.size()) ? -1 : (len > lit.size() ? 1 : 0);
           return cmp_op_holds(p.op, cmp);
+        }
+        if (p.col < 0 || static_cast<size_t>(p.col) >= t->cache_int_cols.size() ||
+            i < 0 || static_cast<size_t>(i) >=
+                      t->cache_int_cols[static_cast<size_t>(p.col)].size()) {
+          return false;
         }
         const int64_t value = t->cache_int_cols[static_cast<size_t>(p.col)][i];
         const int cmp = (value < p.lit_i) ? -1 : (value > p.lit_i ? 1 : 0);
