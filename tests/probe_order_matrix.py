@@ -45,9 +45,10 @@ def dist(vec):
 
 
 class Engine:
-    def __init__(self, data):
+    def __init__(self, data, env=None):
         self.proc = subprocess.Popen([BIN, "--data-dir", data], stdin=subprocess.PIPE,
-                                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
+                                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0,
+                                     env=env)
         self.buf = b""
         self.seq = 0
         if self.line() is None:
@@ -199,6 +200,39 @@ def main():
                         got = [row[index] for row in (reply.get("rows") or [])]
                         want = window(ordered_ids(kind), limit, offset)
                         check(label + " :: order", got == want, "got %r want %r" % (got, want))
+        engine.close()
+
+        # the same matrix with a tiny cache budget, which puts every query on the paged path
+        env = dict(os.environ, MVDB_CACHE_BUDGET_BYTES="1024")
+        engine = Engine(data, env=env)
+        for kind, order_sql, extra in shapes:
+            for projection in ("id", "*"):
+                for limit, offset, window_sql in windows:
+                    select = projection
+                    order_used = order_sql
+                    if extra is not None:
+                        if projection == "*":
+                            order_used = order_sql.replace(
+                                "d", "L2_DISTANCE(emb,'[%s]')" % LITERAL)
+                        else:
+                            select = projection + ", L2_DISTANCE(emb,'[%s]') AS d" % LITERAL
+                    sql = "SELECT %s FROM t ORDER BY %s%s" % (select, order_used, window_sql)
+                    label = "paged order=%s proj=%s limit=%s offset=%s" % (
+                        kind, projection, limit, offset)
+                    reply = engine.req(sql)
+                    check(label + " :: answered", reply is not None, "process gone")
+                    if reply is None:
+                        return 1
+                    if reply.get("ok") is not True:
+                        check(label + " :: accepted", False, json.dumps(reply)[:140])
+                        continue
+                    cols = reply.get("columns") or []
+                    if "id" not in cols:
+                        continue
+                    index = cols.index("id")
+                    got = [row[index] for row in (reply.get("rows") or [])]
+                    want = window(ordered_ids(kind), limit, offset)
+                    check(label + " :: order", got == want, "got %r want %r" % (got, want))
         engine.close()
         return 0
     finally:
