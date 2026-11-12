@@ -190,7 +190,7 @@ bool tokenize(const std::string& sql, std::vector<Token>* out, std::string* err)
           continue;
         }
       }
-      static const char* kPunct = "(),*=<>;[]";
+      static const char* kPunct = "(),.=*<>;[]";
       if (std::strchr(kPunct, static_cast<int>(c)) == nullptr) {
         *err = std::string("unexpected character '") + static_cast<char>(c) + "'";
         return false;

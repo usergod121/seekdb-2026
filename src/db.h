@@ -57,6 +57,8 @@ class Database {
   Result exec_select(const Stmt& st);
   Result exec_update(const Stmt& st, bool replay);
   Result exec_delete(const Stmt& st, bool replay);
+  Result exec_drop_table(const Stmt& st);
+  Result exec_truncate(const Stmt& st);
 
   Err load_catalog();
   Err save_catalog();

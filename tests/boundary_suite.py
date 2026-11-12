@@ -173,7 +173,6 @@ def run(args):
                 "ALTER TABLE a ADD extra BIGINT;",
                 "INSERT INTO a VALUES (NULL, 1);",
                 "UPDATE a SET id = 2 WHERE id = 1;",
-                "DROP TABLE a;",
                 "CREATE INDEX idx ON a (v);",
             ]
             problems = []

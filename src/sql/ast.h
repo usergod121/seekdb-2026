@@ -33,7 +33,8 @@ struct Expr {
   std::vector<ExprPtr> args;
 };
 
-enum class StmtKind { CreateTable, CreateIndex, Insert, Select, Update, Delete, Begin, Commit, Rollback };
+enum class StmtKind { CreateTable, CreateIndex, Insert, Select, Update, Delete,
+                      DropTable, Truncate, Begin, Commit, Rollback };
 
 struct ColumnDef {
   std::string name;

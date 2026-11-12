@@ -523,6 +523,8 @@ Result Database::exec(const Stmt& st, const bool replay) {
     case StmtKind::Select: return exec_select(st);
     case StmtKind::Update: return exec_update(st, replay);
     case StmtKind::Delete: return exec_delete(st, replay);
+    case StmtKind::DropTable: return exec_drop_table(st);
+    case StmtKind::Truncate: return exec_truncate(st);
     default: break;
   }
   Result r;

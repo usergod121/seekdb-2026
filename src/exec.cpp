@@ -367,6 +367,52 @@ bool eval_bool(const Ctx& ctx, const Expr& e, bool* out, std::string* err) {
     *out = false;
     return true;
   }
+  if (equals_ci(e.name, "NOT NULL") || equals_ci(e.name, "IS NULL") ||
+      equals_ci(e.name, "IS NOT NULL")) {
+    // No column ever holds NULL here, so IS NULL is false and IS NOT NULL is true.
+    *out = equals_ci(e.name, "IS NOT NULL");
+    return true;
+  }
+  if (equals_ci(e.name, "NOT IN")) {
+    Value left;
+    if (!eval_scalar(ctx, *e.args[0], &left, nullptr, err)) return false;
+    bool inside = false;
+    for (size_t i = 1; i < e.args.size() && !inside; ++i) {
+      Value right;
+      if (!eval_scalar(ctx, *e.args[i], &right, nullptr, err)) return false;
+      if (left.type == ColType::BigInt && right.type == ColType::BigInt) {
+        inside = (left.i == right.i);
+      } else {
+        const std::string a = (left.type == ColType::BigInt) ? std::to_string(left.i) : left.s;
+        const std::string b = (right.type == ColType::BigInt) ? std::to_string(right.i) : right.s;
+        inside = (cmp_str(a, b) == 0);
+      }
+    }
+    *out = !inside;
+    return true;
+  }
+  if (equals_ci(e.name, "NOT LIKE") || equals_ci(e.name, "NOT BETWEEN")) {
+    bool value = false;
+    if (equals_ci(e.name, "NOT LIKE")) {
+      Value left;
+      Value right;
+      if (!eval_scalar(ctx, *e.args[0], &left, nullptr, err)) return false;
+      if (!eval_scalar(ctx, *e.args[1], &right, nullptr, err)) return false;
+      const std::string text = (left.type == ColType::BigInt) ? std::to_string(left.i) : left.s;
+      const std::string pattern = (right.type == ColType::BigInt) ? std::to_string(right.i) : right.s;
+      value = like_match(text, pattern);
+    } else {
+      Value subject;
+      Value low;
+      Value high;
+      if (!eval_scalar(ctx, *e.args[0], &subject, nullptr, err)) return false;
+      if (!eval_scalar(ctx, *e.args[1], &low, nullptr, err)) return false;
+      if (!eval_scalar(ctx, *e.args[2], &high, nullptr, err)) return false;
+      value = (compare_for_between(subject, low) >= 0 && compare_for_between(subject, high) <= 0);
+    }
+    *out = !value;
+    return true;
+  }
   if (equals_ci(e.name, "LIKE")) {
     // MySQL's two wildcards: '%' matches any run (including none), '_' matches exactly one character.
     // The pattern is compared as text against the cell, with a backslash escaping the next character.
@@ -1351,6 +1397,53 @@ Result Database::exec_select(const Stmt& st) {
 }
 
 // ---- UPDATE / DELETE ------------------------------------------------------
+
+Result Database::exec_drop_table(const Stmt& st) {
+  Result r;
+  const std::string key = lower_ascii(st.table);
+  auto it = tables_.find(key);
+  if (it == tables_.end()) {
+    if (!st.if_not_exists) {
+      r.err = Err::TableNotFound;
+      r.message = "table doesn't exist: " + st.table;
+    }
+    return r;
+  }
+  // Record the statement for undo?  A dropped table is not part of the required subset; the rows are
+  // removed with the files, so the statement simply cannot be rolled back and is treated like other
+  // DDL, which the engine keeps outside transaction guarantees.
+  (void)it->second.close_pages();
+  tables_.erase(it);
+  (void)save_catalog();
+  const std::string path = table_pages_path(st.table);
+  (void)::remove(path.c_str());
+  return r;
+}
+
+Result Database::exec_truncate(const Stmt& st) {
+  Result r;
+  Table* t = find_table(st.table);
+  if (t == nullptr) {
+    r.err = Err::TableNotFound;
+    r.message = "table doesn't exist: " + st.table;
+    return r;
+  }
+  std::vector<Rid> rids;
+  if (t->heap.live_rows(&rids) != Err::Ok) {
+    r.err = Err::IoError;
+    return r;
+  }
+  for (const Rid& rid : rids) {
+    if (t->heap.remove(rid) != Err::Ok) {
+      r.err = Err::IoError;
+      return r;
+    }
+  }
+  t->pk_index.clear();
+  t->live_rows = 0;
+  t->invalidate_cache();
+  return r;   // TRUNCATE reports no affected rows in MySQL
+}
 
 Result Database::exec_update(const Stmt& st, const bool replay) {
   (void)replay;

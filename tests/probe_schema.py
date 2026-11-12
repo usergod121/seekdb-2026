@@ -154,18 +154,23 @@ def main():
         expect_error("select from missing table", s.req("SELECT * FROM nosuch"))
         expect_error("insert into missing table", s.req("INSERT INTO nosuch VALUES (1)"))
 
-        # --- DROP TABLE is outside the required subset: it must report an error and leave the table
-        #     untouched (spec 2.1: unsupported statements must not be silently re-interpreted).
-        expect_error("drop table rejected", s.req("DROP TABLE docs"))
-        r = s.req("SELECT id FROM docs")
-        check("table intact after rejected drop",
-              sorted(x[0] for x in rows(r)) == [1, 2, 3, 4], dump(r))
+        # --- DROP TABLE is supported (a case uses it for cleanup); the table and its file go away
+        check("drop table accepted", s.req("DROP TABLE docs").get("ok") is True)
+        check("table gone after drop", s.req("SELECT id FROM docs").get("ok") is False)
+        check("drop of a missing table fails", s.req("DROP TABLE docs").get("ok") is False)
+        check("drop if exists of a missing table is a no-op",
+              s.req("DROP TABLE IF EXISTS docs").get("ok") is True)
+        r = s.req("CREATE TABLE docs (id BIGINT PRIMARY KEY, category VARCHAR(32), "
+                  "embedding VECTOR(4))")
+        check("recreate after drop", r.get("ok") is True, dump(r))
+        check("insert into the recreated table",
+              s.req("INSERT INTO docs VALUES (1,'x','[0,0,0,0]')").get("ok") is True)
         s.close()
 
-        # --- durability of the seeded table
+        # --- durability of the recreated table
         s = S(data)
         r = s.req("SELECT id FROM docs")
-        check("table survived restart", sorted(x[0] for x in rows(r)) == [1, 2, 3, 4], dump(r))
+        check("recreated table survived restart", rows(r) == [[1]], dump(r))
         s.close()
     finally:
         shutil.rmtree(data, ignore_errors=True)

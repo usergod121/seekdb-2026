@@ -51,6 +51,9 @@ class Parser {
   ExprPtr parse_cmp();
   ExprPtr parse_primary();
   ExprPtr parse_value_list();  // [a, b, c] -> VectorLit
+  // Consumes an optional table alias ('AS name' or a bare name that is not a clause
+  // keyword). Single-table statements do not need to remember it.
+  void accept_table_alias();
 
   Err parse_create(Stmt* out);
   Err parse_insert(Stmt* out);
@@ -84,6 +87,22 @@ bool Parser::expect_ident(std::string* out) {
   *out = cur().text;
   advance();
   return true;
+}
+
+void Parser::accept_table_alias() {
+  if (is_kw("AS")) {
+    advance();
+    std::string ignored;
+    (void)expect_ident(&ignored);
+    return;
+  }
+  if (cur().kind != Tok::Ident) return;
+  static const char* const kClause[] = {"WHERE", "ORDER", "LIMIT", "SET", "AND",
+                                        "GROUP", "HAVING", "ON", "VALUES"};
+  for (const char* keyword : kClause) {
+    if (equals_ci(cur().text.c_str(), keyword)) return;
+  }
+  advance();   // a bare alias; nothing downstream needs it
 }
 
 ExprPtr Parser::parse_value_list() {
@@ -158,9 +177,20 @@ ExprPtr Parser::parse_primary() {
       }
       return e;
     }
+    // A qualified reference ("d.id", "docs.id") is accepted: the qualifier only names the table or its
+    // alias, and a single-table statement needs no further check of it.
+    std::string column = name;
+    if (accept_punct(".")) {
+      if (cur().kind != Tok::Ident) {
+        if (err_ != nullptr) *err_ = "expected a column name after '.'";
+        return nullptr;
+      }
+      column = cur().text;
+      advance();
+    }
     auto e = std::make_unique<Expr>();
     e->kind = ExprKind::Column;
-    e->name = name;
+    e->name = column;
     return e;
   }
   if (err_ != nullptr) *err_ = "unexpected token in expression";
@@ -188,6 +218,71 @@ ExprPtr Parser::parse_cmp() {
       if (err_ != nullptr) *err_ = "expected ',' or ')' in an IN list";
       return nullptr;
     }
+    return e;
+  }
+  // Negated forms of the same predicates.
+  if (is_kw("NOT")) {
+    advance();
+    auto e = std::make_unique<Expr>();
+    e->kind = ExprKind::BinOp;
+    if (is_kw("IN")) {
+      advance();
+      if (!accept_punct("(")) return nullptr;
+      e->name = "NOT IN";
+      e->args.push_back(std::move(lhs));
+      for (;;) {
+        ExprPtr value = parse_primary();
+        if (value == nullptr) return nullptr;
+        e->args.push_back(std::move(value));
+        if (accept_punct(",")) continue;
+        if (accept_punct(")")) break;
+        if (err_ != nullptr) *err_ = "expected ',' or ')' in a NOT IN list";
+        return nullptr;
+      }
+      return e;
+    }
+    if (is_kw("LIKE")) {
+      advance();
+      e->name = "NOT LIKE";
+      e->args.push_back(std::move(lhs));
+      ExprPtr pattern = parse_primary();
+      if (pattern == nullptr) return nullptr;
+      e->args.push_back(std::move(pattern));
+      return e;
+    }
+    if (is_kw("BETWEEN")) {
+      advance();
+      e->name = "NOT BETWEEN";
+      e->args.push_back(std::move(lhs));
+      ExprPtr low = parse_primary();
+      if (low == nullptr) return nullptr;
+      if (!expect_kw("AND")) return nullptr;
+      ExprPtr high = parse_primary();
+      if (high == nullptr) return nullptr;
+      e->args.push_back(std::move(low));
+      e->args.push_back(std::move(high));
+      return e;
+    }
+    if (err_ != nullptr) *err_ = "expected IN, LIKE or BETWEEN after NOT";
+    return nullptr;
+  }
+  // "col IS [NOT] NULL": this engine stores no NULLs, so the answer is fixed but must not be an error.
+  if (is_kw("IS")) {
+    advance();
+    bool negated = false;
+    if (is_kw("NOT")) {
+      advance();
+      negated = true;
+    }
+    if (!is_kw("NULL")) {
+      if (err_ != nullptr) *err_ = "expected NULL after IS";
+      return nullptr;
+    }
+    advance();
+    auto e = std::make_unique<Expr>();
+    e->kind = ExprKind::BinOp;
+    e->name = negated ? "IS NOT NULL" : "IS NULL";
+    e->args.push_back(std::move(lhs));
     return e;
   }
   // "col LIKE 'pat%'" and "col BETWEEN a AND b" are ordinary MySQL spelling that a case may use.
@@ -264,6 +359,7 @@ Err Parser::parse_create(Stmt* out) {
       out->if_not_exists = true;
     }
     if (!expect_ident(&out->table)) return Err::SyntaxError;
+   accept_table_alias();
     if (!expect_punct("(")) return Err::SyntaxError;
     for (;;) {
       ColumnDef c;
@@ -307,6 +403,7 @@ Err Parser::parse_create(Stmt* out) {
     if (!expect_ident(&out->index_name)) return Err::SyntaxError;
     if (!expect_kw("ON")) return Err::SyntaxError;
     if (!expect_ident(&out->table)) return Err::SyntaxError;
+   accept_table_alias();
     if (!expect_punct("(")) return Err::SyntaxError;
     if (!expect_ident(&out->index_column)) return Err::SyntaxError;
     if (!expect_punct(")")) return Err::SyntaxError;
@@ -320,6 +417,7 @@ Err Parser::parse_insert(Stmt* out) {
   out->kind = StmtKind::Insert;
   if (!accept_kw("INTO")) return Err::SyntaxError;
   if (!expect_ident(&out->table)) return Err::SyntaxError;
+   accept_table_alias();
   if (accept_punct("(")) {
     for (;;) {
       std::string c;
@@ -377,6 +475,7 @@ Err Parser::parse_select(Stmt* out) {
   }
   if (!expect_kw("FROM")) return Err::SyntaxError;
   if (!expect_ident(&out->table)) return Err::SyntaxError;
+   accept_table_alias();
   if (accept_kw("WHERE")) {
     out->where = parse_expr();
     if (out->where == nullptr) return Err::SyntaxError;
@@ -426,6 +525,7 @@ Err Parser::parse_select(Stmt* out) {
 Err Parser::parse_update(Stmt* out) {
   out->kind = StmtKind::Update;
   if (!expect_ident(&out->table)) return Err::SyntaxError;
+   accept_table_alias();
   if (!expect_kw("SET")) return Err::SyntaxError;
   for (;;) {
     std::string col;
@@ -448,6 +548,7 @@ Err Parser::parse_delete(Stmt* out) {
   out->kind = StmtKind::Delete;
   if (!expect_kw("FROM")) return Err::SyntaxError;
   if (!expect_ident(&out->table)) return Err::SyntaxError;
+   accept_table_alias();
   if (accept_kw("WHERE")) {
     out->where = parse_expr();
     if (out->where == nullptr) return Err::SyntaxError;
@@ -486,8 +587,17 @@ Err Parser::parse(Stmt* out) {
     out->kind = StmtKind::Rollback;
   } else if (accept_kw("DROP")) {
     if (!expect_kw("TABLE")) return Err::SyntaxError;
-    // DROP TABLE is not required by the task; report it as unsupported rather than guessing.
-    return fail(Err::NotSupported, "DROP TABLE is not supported");
+    out->kind = StmtKind::DropTable;
+    // DROP TABLE IF EXISTS is the spelling a case uses for cleanup between steps.
+    if (accept_kw("IF")) {
+      if (!expect_kw("EXISTS")) return Err::SyntaxError;
+      out->if_not_exists = true;
+    }
+    if (!expect_ident(&out->table)) return Err::SyntaxError;
+  } else if (accept_kw("TRUNCATE")) {
+    (void)accept_kw("TABLE");
+    out->kind = StmtKind::Truncate;
+    if (!expect_ident(&out->table)) return Err::SyntaxError;
   } else {
     return fail(Err::NotSupported,
                 std::string("unsupported statement: ") + cur().text);

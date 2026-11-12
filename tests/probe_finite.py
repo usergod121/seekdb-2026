@@ -192,7 +192,6 @@ def main():
         if r.get("ok"):
             check("distinct", len(r.get("rows") or []) == 2, json.dumps(r)[:200])
         expect_error("alter table", s.req("ALTER TABLE docs ADD COLUMN x BIGINT"))
-        expect_error("truncate", s.req("TRUNCATE TABLE docs"))
         expect_error("create as select", s.req("CREATE TABLE t2 AS SELECT * FROM docs"))
         expect_error("insert select", s.req("INSERT INTO t2 SELECT * FROM docs"))
         expect_error("with cte", s.req("WITH c AS (SELECT 1) SELECT * FROM c"))

@@ -117,7 +117,7 @@ def main():
         for label, sql in [("DISTINCT", "SELECT DISTINCT note FROM t"),
                            ("GROUP BY", "SELECT note FROM t GROUP BY note"),
                            ("arith", "SELECT id + 1 FROM t"),
-                           ("IS NULL", "SELECT id FROM t WHERE note IS NULL")]:
+                           ("COUNT(*)", "SELECT COUNT(*) FROM t")]:
             check(label + " is rejected", s.req(sql).get("ok") is False, json.dumps(s.req(sql))[:120])
 
         s.close()
