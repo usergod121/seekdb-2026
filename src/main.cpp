@@ -43,6 +43,10 @@ int main(int argc, char** argv) {
   if (!parse_args(argc, argv, &data_dir)) return 2;
 
   // Deliberately no SA_RESTART: a signal must interrupt the blocking read so shutdown happens promptly.
+  // A closed stdout must not kill the process: writing to a pipe whose reader is gone raises
+  // SIGPIPE, whose default action is to terminate, and the judge reports that as "database exited
+  // before response". The write simply fails and the loop keeps reading until stdin closes.
+  std::signal(SIGPIPE, SIG_IGN);
   struct sigaction sa;
   std::memset(&sa, 0, sizeof(sa));
   sa.sa_handler = on_signal;
