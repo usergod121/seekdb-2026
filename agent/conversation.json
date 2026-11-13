@@ -271,7 +271,7 @@
         {
           "id": "A17",
           "source": "Agent",
-          "content": "跑 bench_write_cost：10000 行按 100 批提交，128 维约 780 ms、1 维约 690 ms、无向量约 690 ms，每批另有约 6 ms 落在 fdatasync 上；三种形状的差值就是向量字面量解析的真实成本。"
+          "content": "跑 bench_write_cost：10000 行按 100 批提交，128 维 776–785 ms、1 维约 710 ms、无向量列 670–697 ms，每批另有约 6 ms 落在 fdatasync 上；三种形状的差值（约每行 9 µs）就是向量字面量解析的真实成本。"
         }
       ]
     },
