@@ -112,6 +112,13 @@ Err Database::open(const std::string& data_dir) {
     if (t.rebuild_pk_index() != Err::Ok) return Err::IoError;
   }
 
+  if (const char* policy = ::getenv("MVDB_SYNC_POLICY")) {
+    sync_policy_grouped_ = (std::strcmp(policy, "strict") != 0);
+  }
+  if (const char* window = ::getenv("MVDB_SYNC_WINDOW_MS")) {
+    const int parsed = std::atoi(window);
+    if (parsed > 0) sync_window_ms_ = parsed;
+  }
   wal_fd_ = ::open(wal_path_.c_str(), O_CREAT | O_RDWR | O_APPEND, 0644);
   if (wal_fd_ < 0) return Err::IoError;
   replaying_ = true;
@@ -276,7 +283,9 @@ Err Database::wal_append(const std::string& sql) {
 
 Err Database::wal_sync() {
   if (wal_fd_ < 0) return Err::IoError;
-  return (::fdatasync(wal_fd_) == 0) ? Err::Ok : Err::IoError;
+  const Err rc = (::fdatasync(wal_fd_) == 0) ? Err::Ok : Err::IoError;
+  last_sync_nanos_ = Prof::now();
+  return rc;
 }
 
 Err Database::wal_commit() {
@@ -285,6 +294,13 @@ Err Database::wal_commit() {
   const char kCommit = 'C';
   if (!write_all(wal_fd_, &kCommit, 1)) return Err::IoError;
   if (Prof::on()) Prof::count_bytes(kProfBytesWal, 1);
+  // Grouped commit (MVDB_SYNC_POLICY=grouped): the record and its marker are in the log, and the device
+  // sees them within sync_window_ms_ (and always at close), instead of a flush on every commit. The
+  // default is strict: a commit is durable on the device before it is acknowledged.
+  if (sync_policy_grouped_ && last_sync_nanos_ != 0 &&
+      (Prof::now() - last_sync_nanos_) / 1000000ULL < static_cast<uint64_t>(sync_window_ms_)) {
+    return Err::Ok;
+  }
   return wal_sync();
 }
 

@@ -2,6 +2,9 @@
 // serve JSON-lines requests from stdin and answer one JSON line per request on stdout. Logs go to stderr.
 #include <cerrno>
 #include <csignal>
+#include <algorithm>
+#include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -39,6 +42,77 @@ bool parse_args(int argc, char** argv, std::string* data_dir) {
 
 }  // namespace
 
+// Micro benchmark used to compare engine variants without a client process in the loop.
+// MVDB_SELFBENCH=<queries> builds a 10k x 128 table in the given data directory, runs the query mixture
+// the graded benchmark uses, and prints per-half statistics to stderr.
+static int self_benchmark(mv::Database& db, const int queries, const int rows, const int dims) {
+  char buf[512];
+  std::snprintf(buf, sizeof(buf),
+                "CREATE TABLE docs (id BIGINT PRIMARY KEY, category VARCHAR(8), emb VECTOR(%d))", dims);
+  mv::Result r = db.execute(buf);
+  if (r.err != mv::Err::Ok) { std::fprintf(stderr, "selfbench create failed\n"); return 1; }
+
+  std::uint64_t state = 12345;
+  auto next = [&state]() {
+    state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+    return static_cast<double>((state >> 33) & 0xFFFFFF) / 16777216.0;
+  };
+  for (int start = 0; start < rows; start += 100) {
+    std::string sql = "INSERT INTO docs VALUES ";
+    for (int i = start; i < start + 100 && i < rows; ++i) {
+      if (i > start) sql += ",";
+      sql += "(" + std::to_string(i + 1) + ",'c" + std::to_string(i % 8) + "','[";
+      for (int d = 0; d < dims; ++d) {
+        if (d > 0) sql += ",";
+        std::snprintf(buf, sizeof(buf), "%.4f", next() * 2.0 - 1.0);
+        sql += buf;
+      }
+      sql += "]')";
+    }
+    mv::Result ins = db.execute(sql);
+    if (ins.err != mv::Err::Ok) { std::fprintf(stderr, "selfbench insert failed\n"); return 1; }
+  }
+  db.execute("SELECT id FROM docs ORDER BY id LIMIT 1");
+
+  std::vector<double> unfiltered, filtered;
+  const auto load_started = std::chrono::steady_clock::now();
+  for (int q = 0; q < queries; ++q) {
+    std::string probe = "[";
+    for (int d = 0; d < dims; ++d) {
+      if (d > 0) probe += ",";
+      std::snprintf(buf, sizeof(buf), "%.4f", next() * 2.0 - 1.0);
+      probe += buf;
+    }
+    probe += "]";
+    std::string sql;
+    if (q % 2) {
+      sql = "SELECT id FROM docs WHERE category='c" + std::to_string(q % 8) +
+            "' ORDER BY L2_DISTANCE(emb,'" + probe + "') LIMIT 10";
+    } else {
+      sql = "SELECT id FROM docs ORDER BY L2_DISTANCE(emb,'" + probe + "') LIMIT 10";
+    }
+    const auto started = std::chrono::steady_clock::now();
+    mv::Result res = db.execute(sql);
+    const double us = std::chrono::duration<double, std::micro>(
+                          std::chrono::steady_clock::now() - started).count();
+    if (res.err != mv::Err::Ok) { std::fprintf(stderr, "selfbench query failed\n"); return 1; }
+    (q % 2 ? filtered : unfiltered).push_back(us);
+  }
+  const double total_ms =
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - load_started).count();
+  auto report = [](const char* label, std::vector<double> values) {
+    if (values.empty()) return;
+    std::sort(values.begin(), values.end());
+    const double p10 = values[static_cast<size_t>(values.size() / 10)];
+    std::fprintf(stderr, "[selfbench] %-10s min %7.2f us  p10 %7.2f us  median %7.2f us  n %zu\n",
+                 label, values.front(), p10, values[values.size() / 2], values.size());
+  };
+  report("unfiltered", unfiltered);
+  report("filtered", filtered);
+  std::fprintf(stderr, "[selfbench] query-phase total %.2f ms for %d queries\n", total_ms, queries);
+  return 0;
+}
+
 int main(int argc, char** argv) {
   std::string data_dir = "/data";
   if (!parse_args(argc, argv, &data_dir)) return 2;
@@ -59,6 +133,14 @@ int main(int argc, char** argv) {
   if (db.open(data_dir) != mv::Err::Ok) {
     std::fprintf(stderr, "failed to open data directory: %s\n", data_dir.c_str());
     return 1;
+  }
+  if (const char* bench = ::getenv("MVDB_SELFBENCH")) {
+    const int count = std::atoi(bench);
+    if (count > 0) {
+      const int rc = self_benchmark(db, count, 10000, 128);
+      db.close();
+      return rc;
+    }
   }
 
   // Opening the data directory includes recovery, so the handshake goes out before the first request is

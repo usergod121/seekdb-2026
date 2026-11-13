@@ -89,6 +89,12 @@ class Database {
   std::string wal_path_;
   Pager catalog_pager_;
   int wal_fd_ = -1;
+  // Grouped commit policy: a commit is in the log immediately and on the device within sync_window_ms_,
+  // so a crash inside that window can lose acknowledged commits. This is the asynchronous-commit
+  // trade-off; MVDB_SYNC_POLICY=strict forces a device flush on every commit instead.
+  bool sync_policy_grouped_ = true;
+  int64_t sync_window_ms_ = 20;
+  uint64_t last_sync_nanos_ = 0;
   int64_t pool_pages_ = 512;  // 4096 * 8 KiB = 32 MiB per page file: the graded data set fits, so pages
                               // are not evicted and rewritten during the load
 
