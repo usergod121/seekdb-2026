@@ -80,6 +80,23 @@ Err Pager::close() {
   return rc;
 }
 
+int64_t Pager::dirty_bytes() const {
+  int64_t bytes = 0;
+  for (const auto& kv : frames_) {
+    if (kv.second->dirty) bytes += kPageSize;
+  }
+  return bytes;
+}
+
+Err Pager::close_discarding_dirty() {
+  frames_.clear();
+  if (fd_ >= 0) {
+    ::close(fd_);
+    fd_ = -1;
+  }
+  return Err::Ok;
+}
+
 Err Pager::write_back(Frame* f) {
   if (!f->dirty) return Err::Ok;
   if (!pwrite_all(fd_, f->data, kPageSize, static_cast<off_t>(f->page_id) * kPageSize)) {

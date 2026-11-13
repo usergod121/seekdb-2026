@@ -97,6 +97,11 @@ Err Table::close_pages() {
   return pager.close();
 }
 
+Err Table::close_pages_discarding() {
+  (void)heap.close();
+  return pager.close_discarding_dirty();
+}
+
 Err Table::encode_row(const Row& row, std::string* out) const {
   out->clear();
   out->reserve(32 + row.vec.size() * sizeof(float));

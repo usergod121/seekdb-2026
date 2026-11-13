@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
-"""Where do the measured bytes go, and how long does a restart take?
+"""Where do the measured bytes go, and what does a restart cost?
 
-The graded metric weights disk I/O and peak memory at 20% each, and B counts physical reads and writes
-on /data for the whole run. This probe loads the graded shape twice (with and without the vector
-column), reads the kernel's per-process byte counters for the engine, and then restarts the engine on
-the same directory to time recovery from the write-ahead log.
-
-Usage: probe_io_budget.py [--binary PATH] [--rows N] [--dims N]
+Loads the graded shape twice (with and without the vector column), then restarts the engine on the same
+directory to time recovery. The engine reports its own /proc/self/io counters at shutdown (it prints
+them when MVDB_PROFILE is set), so the numbers cover the whole run including the close, which a probe
+reading /proc while the process is alive would miss.
 """
 import argparse
 import json
 import os
+import re
 import subprocess
 import tempfile
 import time
+
+PROFILE_IO = re.compile(r"\[profile\] io (read_bytes|write_bytes):\s*(\d+)")
+PROFILE_CLOSE = re.compile(r"\[profile\] close: wal_bytes=(\d+) dirty_page_bytes=(\d+) keep_log=(\d)")
 
 
 def fmt(vec):
@@ -22,8 +24,10 @@ def fmt(vec):
 
 class Session:
     def __init__(self, binary, data):
+        env = dict(os.environ)
+        env["MVDB_PROFILE"] = "1"
         self.proc = subprocess.Popen([binary, "--data-dir", data], stdin=subprocess.PIPE,
-                                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0, env=env)
         self.buf = b""
         self.seq = 0
         self.line()
@@ -44,20 +48,13 @@ class Session:
                               "search_mode": "exact"}) + "\n").encode())
         return json.loads(self.line())
 
-    def io_bytes(self):
-        """Physical read/write bytes charged to the engine process so far."""
-        try:
-            with open("/proc/%d/io" % self.proc.pid, "r") as handle:
-                fields = dict(line.split(": ") for line in handle.read().splitlines())
-        except OSError:
-            return None
-        return (int(fields.get("read_bytes", 0)), int(fields.get("write_bytes", 0)))
-
     def shutdown(self):
         self.seq += 1
         os.write(self.proc.stdin.fileno(), (json.dumps({"id": self.seq, "op": "shutdown"}) + "\n").encode())
         self.line()
-        self.proc.wait(timeout=120)
+        err = self.proc.stderr.read().decode("utf-8", "replace")
+        self.proc.wait(timeout=180)
+        return err
 
 
 def load(binary, data, rows, dims, with_vector):
@@ -68,7 +65,7 @@ def load(binary, data, rows, dims, with_vector):
         s.req("CREATE TABLE docs (id BIGINT PRIMARY KEY, tag VARCHAR(8), emb VECTOR(%d))" % dims)
     else:
         s.req("CREATE TABLE docs (id BIGINT PRIMARY KEY, tag VARCHAR(8))")
-    before = s.io_bytes()
+    started = time.perf_counter()
     for start in range(0, rows, 100):
         if with_vector:
             values = ",".join("(%d,'t%d','[%s]')" % (i + 1, i % 8,
@@ -80,23 +77,31 @@ def load(binary, data, rows, dims, with_vector):
         reply = s.req("INSERT INTO docs VALUES " + values)
         if reply.get("ok") is not True:
             raise SystemExit("insert failed: %r" % (reply,))
-    after = s.io_bytes()
-    s.req("SELECT id FROM docs WHERE tag='t1' ORDER BY L2_DISTANCE(emb,'[%s]') LIMIT 10"
-          % fmt([0.0] * dims) if with_vector else "SELECT id FROM docs LIMIT 10")
-    s.shutdown()
+    load_ms = (time.perf_counter() - started) * 1000.0
+    if with_vector:
+        s.req("SELECT id FROM docs WHERE tag='t1' ORDER BY L2_DISTANCE(emb,'[%s]') LIMIT 10"
+              % fmt([0.0] * dims))
+    else:
+        s.req("SELECT id FROM docs LIMIT 10")
+    err = s.shutdown()
+    io_bytes = {m.group(1): int(m.group(2)) for m in PROFILE_IO.finditer(err)}
+    close = PROFILE_CLOSE.search(err)
     data_bytes = sum(os.path.getsize(os.path.join(data, name)) for name in os.listdir(data))
-    return before, after, data_bytes
+    wal_bytes = int(close.group(1)) if close else 0
+    page_bytes = int(close.group(2)) if close else 0
+    keep_log = close.group(3) == "1" if close else False
+    return load_ms, io_bytes, data_bytes, wal_bytes, page_bytes, keep_log
 
 
 def restart(binary, data):
-    started = time.time()
+    started = time.perf_counter()
     s = Session(binary, data)
-    ready_at = time.time() - started
-    started = time.time()
+    ready_ms = (time.perf_counter() - started) * 1000.0
+    started = time.perf_counter()
     reply = s.req("SELECT id FROM docs ORDER BY id LIMIT 3")
-    query_at = time.time() - started
+    query_ms = (time.perf_counter() - started) * 1000.0
     s.shutdown()
-    return ready_at, query_at, reply.get("ok")
+    return ready_ms, query_ms, reply.get("ok")
 
 
 def main():
@@ -108,17 +113,15 @@ def main():
 
     for with_vector in (True, False):
         data = tempfile.mkdtemp(prefix="mvdb_io_")
-        before, after, data_bytes = load(args.binary, data, args.rows, args.dims, with_vector)
-        ready_at, query_at, ok = restart(args.binary, data)
+        load_ms, io_bytes, data_bytes, wal_bytes, page_bytes, keep_log = load(
+            args.binary, data, args.rows, args.dims, with_vector)
+        ready_ms, query_ms, ok = restart(args.binary, data)
         label = "128-dim vector" if with_vector else "no vector column"
-        if before and after:
-            print("%-16s rows %d  write_bytes %d  read_bytes %d  files on /data %d bytes  "
-                  "restart ready %.3f s  first query %.3f s  (%s)"
-                  % (label, args.rows, after[1] - before[1], after[0] - before[0], data_bytes,
-                     ready_at, query_at, "ok" if ok else "FAILED"))
-        else:
-            print("%-16s rows %d  /proc io unavailable  files on /data %d bytes  restart ready %.3f s"
-                  % (label, args.rows, data_bytes, ready_at))
+        print("%-16s rows %d  own_writes %d  own_reads %d  final_files %d  log %d  dirty_pages %d  "
+              "keep_log %d  load %.0f ms  restart_ready %.0f ms  first_query %.0f ms (%s)"
+              % (label, args.rows, io_bytes.get("write_bytes", -1), io_bytes.get("read_bytes", -1),
+                 data_bytes, wal_bytes, page_bytes, 1 if keep_log else 0, load_ms, ready_ms, query_ms,
+                 "ok" if ok else "FAILED"))
     return 0
 
 

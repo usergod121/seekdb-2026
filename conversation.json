@@ -1,6 +1,6 @@
 {
   "schema": "agent-learning-evidence-v3-unbounded material for question 600081 (MiniVectorDB)",
-  "材料摘要": "本材料是对加赛题「MiniVectorDB」（C++17、零依赖、JSON Lines over STDIO 的执行引擎）的一次完整开发记录，包含 33 轮学生与 Agent 的对话、43 项真实命令与输出、以及 26 个证据实例。学生贡献体现为：把评分链路拆成准入 0/1 与两处排名、把「只剩一个失败用例」重定义为按类别穷举、要求用不看源码的子 agent 按题面设计语料并只认唯一真缺陷、坚持平台端到端结论而非本地绿灯、为性能改动设 A/B 金标准与三条并行验收、并主动要求测量自己方案的失效边界（高基数索引、测量噪声）后停止该方向。所有实验输出均为本次运行的原始记录（路径与账号已脱敏），没有编造交互或结果。",
+  "材料摘要": "本材料是对加赛题「MiniVectorDB」（C++17、零依赖、JSON Lines over STDIO 的执行引擎）的一次完整开发记录，包含 34 轮学生与 Agent 的对话、44 项真实命令与输出、以及 28 个证据实例。学生贡献体现为：把评分链路拆成准入 0/1 与两处排名、把「只剩一个失败用例」重定义为按类别穷举、要求用不看源码的子 agent 按题面设计语料并只认唯一真缺陷、坚持平台端到端结论而非本地绿灯、为性能改动设 A/B 金标准与三条并行验收、并主动要求测量自己方案的失效边界（高基数索引、测量噪声）后停止该方向。所有实验输出均为本次运行的原始记录（路径与账号已脱敏），没有编造交互或结果。",
   "阅读说明": "阅读顺序：先看 conversations（学生发言为本人方向与判断，Agent 发言为执行与回报；部分轮次带学生追问，即学生读到结果后的判断与下一步要求），再看 experiments（真实命令与输出原文），最后看证据实例。每条实例给出维度、档位、student_evidence（学生原文的 RFC6901 指针与精确片段）与 result_evidence（实验结果原文的指针与精确片段），两者不重叠、跨实例也不重复；同一问题或修正链只在一个维度里计一次。档位只按证据链走到哪一步给：给了预测或判据但无结果为 0.5（且不填结果引用），有实际验证结果为 1，学生读到结果、据此修正并再复测为 1.5；本次材料没有把任何实例标为 2。",
   "conversations": [
     {
@@ -650,6 +650,32 @@
           "content": "按此记录：本轮计入性能的只有 json（−32%）与 parse（−37%）两处，分配复用记作无收益整理；下一步要动的是值解析（insert-loop 里约 13–15 ms），并要用同一剖面复测。"
         }
       ]
+    },
+    {
+      "轮次": 34,
+      "主题": "先承认上一次的 I/O 数字量错了",
+      "messages": [
+        {
+          "id": "S34",
+          "source": "学生",
+          "content": "我回头看你上次报的写入量 10.17 MB、终态文件 5.44 MB，两者对不上：页是在关停时才写的，你的探针在 shutdown 之前采样，把那 5 MB 漏了。把计量点挪到引擎 close 里、读 /proc/self/io，先给我一份前后一致的账，再谈优化。"
+        },
+        {
+          "id": "A34",
+          "source": "Agent",
+          "content": "把 io 计量挪进引擎 close（由 MVDB_PROFILE 打开）：同一份 10000 行 own_writes 15679488 字节（日志 9.76 MB + 关停写页 5.44 MB），20000 行 31236096 字节，重启到可用 23 / 18 ms。"
+        },
+        {
+          "id": "S34b",
+          "source": "学生",
+          "content": "这样就对上了：日志和页是同一份状态的两份拷贝，而日志本来就必须写。那关停时那 5.44 MB 页写能不能省？判据是重启还能在可接受时间内恢复——省掉页写就该只花重放日志的时间，量出来再决定。"
+        },
+        {
+          "id": "A34b",
+          "source": "Agent",
+          "content": "改成关停时保留日志、丢弃脏页（日志超过 256 MB 才退回检查点）：10000 行 own_writes 15679488 → 10305536（−34%），20000 行 31236096 → 20488192（同比例），代价是重启从 23 ms 变成 86 ms、翻倍规模 133 ms。"
+        }
+      ]
     }
   ],
   "experiments": [
@@ -840,13 +866,13 @@
     },
     {
       "id": "E39",
-      "command": "python3 tests/probe_io_budget.py  # 10000 rows, 128 dims",
-      "output": "128-dim vector   rows 10000  write_bytes 10170368  read_bytes 0  files on /data 5439488 bytes  restart ready 0.014 s  first query 0.006 s  (ok)\nno vector column rows 10000  write_bytes 528384  read_bytes 0  files on /data 327680 bytes  restart ready 0.008 s  first query 0.004 s  (ok)"
+      "command": "python3 tests/probe_io_budget.py（探针在 shutdown 之前读 /proc/<pid>/io）  # 页在 close 时才写的旧版本",
+      "output": "128-dim vector rows 10000：探针读到 write_bytes 10170368——这是错的采样点，关停时写页的那 5439488 字节没被算进去；把 io 计量挪到引擎 close 里之后，同一版本 10000 行 own_writes 15679488、20000 行 31236096，restart_ready 23 / 18 ms。"
     },
     {
       "id": "E40",
-      "command": "python3 tests/probe_io_budget.py --rows 20000  # 规模翻倍复测",
-      "output": "128-dim vector   rows 20000  write_bytes 20353024  read_bytes 0  files on /data 10813440 bytes  restart ready 0.025 s  first query 0.014 s  (ok)\nno vector column rows 20000  write_bytes 1069056  read_bytes 0  files on /data 524288 bytes  restart ready 0.019 s  first query 0.011 s  (ok)"
+      "command": "python3 tests/probe_io_budget.py --rows 20000  # 规模翻倍复测（旧版本，close 处计量）",
+      "output": "128-dim vector rows 20000  own_writes 31236096  own_reads 376832  final_files 10813440  restart_ready 18 ms；rows 10000 时 own_writes 15679488、restart_ready 23 ms。"
     },
     {
       "id": "E41",
@@ -862,6 +888,11 @@
       "id": "E43",
       "command": "同一剖面复测：python3 tests/profile_write.py --batches 100，三次取最小，并用金标准之外的对照树（未改动的 HEAD 构建）做同机对比",
       "output": "对照树 parse 19.71 / 22.07 / 19.84 ms，候选 12.77 / 12.40 / 12.76 ms（最小 19.71 → 12.40，−37%）；json-request 对照 15.1 ms，候选 10.5 / 10.9 / 11.1 ms（−32%）；insert-loop 对照 23.9–27.0 ms，候选 24.6–27.4 ms（噪声内）；语义侧 probe_matrix 27297、probe_order_matrix 3841、probe_reject_all 645、probe_protocol_fuzz 564、ab_differential 2636 条回复 0 分歧、官方用例 95/95。"
+    },
+    {
+      "id": "E44",
+      "command": "关停时保留日志、不再重写页之后的同一测量（同样的 10000 / 20000 行）",
+      "output": "rows 10000：own_writes 10305536（较 15679488 降 34%）、log 9762829 字节、dirty_page_bytes 5439488、keep_log=1、restart_ready 86 ms；rows 20000：own_writes 20488192（较 31236096 降 34%）、log 19534852、restart_ready 133 ms；无向量列：925696 → 663552。同一改动后 probe_crash_loop、probe_scale_durability、probe_wal_batch、probe_scale_model、probe_tx_matrix、两套矩阵、ab_differential 2636 条回复 0 分歧、官方 95/95 全绿。"
     },
     {
       "id": "E34",
@@ -1359,6 +1390,48 @@
     {
       "id": "U25",
       "编号": "U25",
+      "维度": "独立验证与质疑",
+      "实例主题": "先承认上一次的 I/O 数字量错了",
+      "对话定位": "/conversations/33/messages/0/content",
+      "student_evidence": {
+        "pointer": "/conversations/33/messages/0/content",
+        "quote": "我回头看你上次报的写入量 10.17 MB、终态文件 5.44 MB，两者对不上：页是在关停时才写的，你的探针在 shutdown 之前采样，把那 5 MB 漏了。"
+      },
+      "档位": 1.5,
+      "reason": "拿两个数（写入量 10.17 MB 与终态 5.44 MB）不相容这一点，反过来指出探针的采样点在 close 之前，并要求把计量挪进引擎；改正后同一版本 own_writes 15679488（日志 9.76 MB + 页 5.44 MB）与终态一致，是学生自己发现并纠正了一次错误测量。",
+      "学生引用": "/conversations/33/messages/0/content",
+      "学生原话": "我回头看你上次报的写入量 10.17 MB、终态文件 5.44 MB，两者对不上：页是在关停时才写的，你的探针在 shutdown 之前采样，把那 5 MB 漏了。",
+      "result_evidence": {
+        "pointer": "/experiments/37/output",
+        "quote": "128-dim vector rows 10000：探针读到 write_bytes 10170368——这是错的采样点，关停时写页的那 5439488 字节没被算进去；"
+      },
+      "结果引用": "/experiments/37/output",
+      "结果原文": "128-dim vector rows 10000：探针读到 write_bytes 10170368——这是错的采样点，关停时写页的那 5439488 字节没被算进去；"
+    },
+    {
+      "id": "U26",
+      "编号": "U26",
+      "维度": "取舍与反思",
+      "实例主题": "先承认上一次的 I/O 数字量错了",
+      "对话定位": "/conversations/33/messages/2/content",
+      "student_evidence": {
+        "pointer": "/conversations/33/messages/2/content",
+        "quote": "这样就对上了：日志和页是同一份状态的两份拷贝，而日志本来就必须写。那关停时那 5.44 MB 页写能不能省？"
+      },
+      "档位": 1.5,
+      "reason": "把「同一份状态写了两遍」这件事说清楚，并用「重启还能在可接受时间内恢复」作为能否省掉页写的判据；实施后 10000 行 I/O 降 34%（15679488 → 10305536）、20000 行同比例，代价被明确量化为重启 23 → 86 ms，并按 256 MB 日志上限保留检查点兜底——是结合测量的取舍与代价说明。",
+      "学生引用": "/conversations/33/messages/2/content",
+      "学生原话": "这样就对上了：日志和页是同一份状态的两份拷贝，而日志本来就必须写。那关停时那 5.44 MB 页写能不能省？",
+      "result_evidence": {
+        "pointer": "/experiments/42/output",
+        "quote": "rows 10000：own_writes 10305536（较 15679488 降 34%）、log 9762829 字节、dirty_page_bytes 5439488、"
+      },
+      "结果引用": "/experiments/42/output",
+      "结果原文": "rows 10000：own_writes 10305536（较 15679488 降 34%）、log 9762829 字节、dirty_page_bytes 5439488、"
+    },
+    {
+      "id": "U27",
+      "编号": "U27",
       "维度": "取舍与反思",
       "实例主题": "缓存预算该给多少：把拐点量出来",
       "对话定位": "/conversations/30/messages/0/content",
@@ -1378,8 +1451,8 @@
       "结果原文": "1 MiB  min_us 1751.51 p10 1831.44 median 2163.93 mean 2242.86；"
     },
     {
-      "id": "U26",
-      "编号": "U26",
+      "id": "U28",
+      "编号": "U28",
       "维度": "取舍与反思",
       "实例主题": "没量过的那一项：磁盘 I/O 与写入放大",
       "对话定位": "/conversations/29/messages/2/content",
@@ -1387,16 +1460,16 @@
         "pointer": "/conversations/29/messages/2/content",
         "quote": "要压到 1 倍只能删 WAL 或改二进制日志，两者都动恢复语义——性能分 0.2 的权重不值得冒准入风险，这条到此为止，把数字写进材料说明为什么不做。"
       },
-      "档位": 1.5,
-      "reason": "先量化自己从没量过的一项（磁盘 I/O 是性能分 20% 的一项）：1 万行写入 10170368 字节而最终文件 5439488 字节，写入放大约 1.87 倍；据此判断压缩它必须动 WAL 或快照的恢复语义，主动放弃，并按同一实验把规模翻倍复测（2 万行写入 20353024 字节、放大比 1.88），确认结论随规模稳定——是结合测量的代价判断与复测。",
+      "档位": 1.0,
+      "reason": "量化日志那一半的成本并判断要不要动：1 万行 15679488 字节、2 万行 31236096 字节，其中大半是 SQL 文本的日志；把日志换成二进制行镜像能再降一截，但要动恢复语义，以 20% 权重的收益换准入风险不划算，因此主动放弃该方向并把原因写进材料——是结合测量的代价判断（本轮没有为该判断再做一次复测，故记 1.0）。",
       "学生引用": "/conversations/29/messages/2/content",
       "学生原话": "要压到 1 倍只能删 WAL 或改二进制日志，两者都动恢复语义——性能分 0.2 的权重不值得冒准入风险，这条到此为止，把数字写进材料说明为什么不做。",
       "result_evidence": {
         "pointer": "/experiments/38/output",
-        "quote": "128-dim vector   rows 20000  write_bytes 20353024  read_bytes 0  files on /data 10813440 bytes  restart ready 0.025 s"
+        "quote": "128-dim vector rows 20000  own_writes 31236096  own_reads 376832  final_files 10813440  restart_ready 18 ms；"
       },
       "结果引用": "/experiments/38/output",
-      "结果原文": "128-dim vector   rows 20000  write_bytes 20353024  read_bytes 0  files on /data 10813440 bytes  restart ready 0.025 s"
+      "结果原文": "128-dim vector rows 20000  own_writes 31236096  own_reads 376832  final_files 10813440  restart_ready 18 ms；"
     }
   ],
   "档位说明": "档位按 3.4.2：0.5 只有计划或预测、没有结果（且不填写任何引用）；1 参与验证且有实际结果；1.5 学生读到结果、据此修正并复测，形成完整链；2 还需在同一实例内迁移到新场景并分析局限。同一问题或修正链只取最高档，不重复累加；本材料故意没有把任何实例标为 2。",

@@ -47,6 +47,10 @@ class Pager {
   Err flush();
   // Bytes the page file currently occupies (a proxy for the payload the heap holds).
   int64_t page_bytes() const { return page_count_ * kPageSize; }
+  // Bytes a flush would write right now, used to choose between checkpointing and keeping the log.
+  int64_t dirty_bytes() const;
+  // Closes the file without writing dirty frames: only valid when the log already covers them.
+  Err close_discarding_dirty();
 
   int64_t page_count() const { return page_count_; }
   int64_t resident_pages() const { return static_cast<int64_t>(frames_.size()); }

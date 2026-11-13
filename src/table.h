@@ -76,6 +76,9 @@ struct Table {
 
   Err open_pages(const std::string& path, int64_t pool_pages);
   Err close_pages();
+  // Drops dirty pages instead of writing them; the caller guarantees the log holds them.
+  Err close_pages_discarding();
+  int64_t dirty_page_bytes() const { return pager.dirty_bytes(); }
 
   int find_column(const std::string& name) const;
   int64_t dim() const { return (vec_col >= 0) ? columns[vec_col].len : 0; }

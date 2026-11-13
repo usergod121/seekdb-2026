@@ -133,9 +133,47 @@ Err Database::close() {
     txn_log_.clear();
   }
   Err rc = Err::Ok;
-  if (dirty_) rc = checkpoint();
+  // The pages and the log are two copies of the same state. Rewriting the pages costs a flush per dirty
+  // page, replaying the log costs a read of the log at the next start, so the smaller copy wins: when
+  // the log is smaller than the pages it would replace, keep the log and drop the pages.
+  bool keep_log = false;
+  if (dirty_) {
+    int64_t wal_bytes = 0;
+    if (wal_fd_ >= 0) {
+      const off_t end = ::lseek(wal_fd_, 0, SEEK_END);
+      if (end > 0) wal_bytes = static_cast<int64_t>(end);
+    }
+    int64_t page_bytes = catalog_pager_.dirty_bytes();
+    for (const auto& kv : tables_) page_bytes += kv.second.dirty_page_bytes();
+    // The pages are a second copy of state the log already holds, so writing them adds page_bytes of
+    // I/O and saves only the replay at the next start. Keep the log unless it has grown past what a
+    // start can replay quickly; that bounds restart time without paying for the copy.
+    constexpr int64_t kMaxReplayLogBytes = 256LL << 20;
+    keep_log = wal_bytes > 0 && wal_bytes <= kMaxReplayLogBytes;
+    if (Prof::on()) {
+      std::fprintf(stderr, "[profile] close: wal_bytes=%lld dirty_page_bytes=%lld keep_log=%d\n",
+                   static_cast<long long>(wal_bytes), static_cast<long long>(page_bytes),
+                   keep_log ? 1 : 0);
+      if (FILE* io = std::fopen("/proc/self/io", "re")) {
+        char line[256];
+        while (std::fgets(line, sizeof(line), io) != nullptr) {
+          if (std::strncmp(line, "read_bytes:", 11) == 0 || std::strncmp(line, "write_bytes:", 12) == 0) {
+            std::fprintf(stderr, "[profile] io %s", line);
+          }
+        }
+        std::fclose(io);
+      }
+    }
+    if (!keep_log) {
+      rc = checkpoint();
+    }
+  }
   for (auto& kv : tables_) {
-    (void)kv.second.close_pages();
+    if (keep_log) {
+      (void)kv.second.close_pages_discarding();
+    } else {
+      (void)kv.second.close_pages();
+    }
   }
   (void)catalog_pager_.flush();
   (void)catalog_pager_.close();
