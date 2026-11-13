@@ -160,6 +160,15 @@ Err Database::close() {
       std::fprintf(stderr, "[profile] close: wal_bytes=%lld dirty_page_bytes=%lld keep_log=%d\n",
                    static_cast<long long>(wal_bytes), static_cast<long long>(page_bytes),
                    keep_log ? 1 : 0);
+      if (FILE* status = std::fopen("/proc/self/status", "re")) {
+        char line[256];
+        while (std::fgets(line, sizeof(line), status) != nullptr) {
+          if (std::strncmp(line, "VmHWM:", 6) == 0 || std::strncmp(line, "VmRSS:", 6) == 0) {
+            std::fprintf(stderr, "[profile] mem %s", line);
+          }
+        }
+        std::fclose(status);
+      }
       if (FILE* io = std::fopen("/proc/self/io", "re")) {
         char line[256];
         while (std::fgets(line, sizeof(line), io) != nullptr) {

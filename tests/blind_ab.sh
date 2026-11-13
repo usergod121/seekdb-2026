@@ -3,7 +3,7 @@
 # counts as a regression while the corpora's own spec-ambiguous expectations stay visible.
 set -u
 cd /mnt/e/mvdb || exit 1
-GOLDEN=/mnt/e/pw/round2/golden/mvdb-golden-current
+GOLDEN=${MVDB_GOLDEN:-/mnt/e/pw/round2/golden/mvdb-gate-proven}
 CANDIDATE=/mnt/e/mvdb/build/minivectordb
 for bin in "$GOLDEN" "$CANDIDATE"; do
   echo "== $bin"
