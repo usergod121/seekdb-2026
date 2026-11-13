@@ -1,6 +1,6 @@
 {
   "schema": "agent-learning-evidence-v3-unbounded material for question 600081 (MiniVectorDB)",
-  "材料摘要": "本材料是对加赛题「MiniVectorDB」（C++17、零依赖、JSON Lines over STDIO 的执行引擎）的一次完整开发记录，包含 36 轮学生与 Agent 的对话、47 项真实命令与输出、以及 29 个证据实例。学生贡献体现为：把评分链路拆成准入 0/1 与两处排名、把「只剩一个失败用例」重定义为按类别穷举、要求用不看源码的子 agent 按题面设计语料并只认唯一真缺陷、坚持平台端到端结论而非本地绿灯、为性能改动设 A/B 金标准与三条并行验收、并主动要求测量自己方案的失效边界（高基数索引、测量噪声）后停止该方向。所有实验输出均为本次运行的原始记录（路径与账号已脱敏），没有编造交互或结果。",
+  "材料摘要": "本材料是对加赛题「MiniVectorDB」（C++17、零依赖、JSON Lines over STDIO 的执行引擎）的一次完整开发记录，包含 36 轮学生与 Agent 的对话、49 项真实命令与输出、以及 29 个证据实例。学生贡献体现为：把评分链路拆成准入 0/1 与两处排名、把「只剩一个失败用例」重定义为按类别穷举、要求用不看源码的子 agent 按题面设计语料并只认唯一真缺陷、坚持平台端到端结论而非本地绿灯、为性能改动设 A/B 金标准与三条并行验收、并主动要求测量自己方案的失效边界（高基数索引、测量噪声）后停止该方向。所有实验输出均为本次运行的原始记录（路径与账号已脱敏），没有编造交互或结果。",
   "阅读说明": "阅读顺序：先看 conversations（学生发言为本人方向与判断，Agent 发言为执行与回报；部分轮次带学生追问，即学生读到结果后的判断与下一步要求），再看 experiments（真实命令与输出原文），最后看证据实例。每条实例给出维度、档位、student_evidence（学生原文的 RFC6901 指针与精确片段）与 result_evidence（实验结果原文的指针与精确片段），两者不重叠、跨实例也不重复；同一问题或修正链只在一个维度里计一次。档位只按证据链走到哪一步给：给了预测或判据但无结果为 0.5（且不填结果引用），有实际验证结果为 1，学生读到结果、据此修正并再复测为 1.5；本次材料没有把任何实例标为 2。",
   "conversations": [
     {
@@ -763,8 +763,8 @@
     },
     {
       "id": "E7",
-      "command": "查询矩阵分别喂给修复前与修复后的二进制",
-      "output": "修复前：checks: 13074 problems: 1 —— [hot topk] q=[0.0, 0.0] n = '10' limit=1 exact :: answered  process gone；修复后：checks: 27297 no problems。"
+      "command": "python3 tests/probe_matrix.py（修复前的二进制）",
+      "output": "checks: 13074 problems: 1 —— [hot topk] q=[0.0, 0.0] n = '10' limit=1 exact :: answered  process gone。"
     },
     {
       "id": "E8",
@@ -898,8 +898,8 @@
     },
     {
       "id": "E35",
-      "command": "MVDB_BIN=<8 KiB build>/minivectordb python3 -u tests/probe_wide_rows.py（再对 64 KiB 构建跑同一探针）",
-      "output": "8 KiB 页：probe_wide_rows checks: 23 problems: 16——60000 字节行与四列 16 KiB 行被拒（too_many_rows: cannot place the row），65535 个 CJK 字符行与 20000 emoji 行读回 len=None，重启与硬杀后宽行丢失；64 KiB 页：同一探针 checks: 23 no problems。"
+      "command": "MVDB_BIN=<8 KiB build>/minivectordb python3 -u tests/probe_wide_rows.py",
+      "output": "8 KiB 页：probe_wide_rows checks: 23 problems: 16——60000 字节行与四列 16 KiB 行被拒（too_many_rows: cannot place the row），65535 个 CJK 字符行与 20000 emoji 行读回 len=None，重启与硬杀后宽行丢失。"
     },
     {
       "id": "E36",
@@ -960,6 +960,16 @@
       "id": "E47",
       "command": "bash tests/ab_filtered.sh <scratch-copy build> <pointer-kernel build>  # 交替三轮",
       "output": "scratch 拷贝版：min 91.36 / 87.32 / 88.02 µs，p10 94.48 / 89.72 / 92.43，median 98.44 / 94.47 / 100.81；指针版：min 89.35 / 88.26 / 91.90，p10 91.70 / 91.77 / 97.16，median 94.00 / 95.37 / 105.51。差异两个方向都出现，落在噪声内，改动回退。"
+    },
+    {
+      "id": "E48",
+      "command": "python3 tests/probe_matrix.py（修好编译型谓词之后，独立一次运行）",
+      "output": "checks: 27297 no problems——同一套矩阵，修复前的 1 个问题消失，规模从 13074 项扩到 27297 项仍全绿；随后平台准入通过（记录 47252148，ok=1 fail=0）。"
+    },
+    {
+      "id": "E49",
+      "command": "python3 tests/probe_wide_rows.py（64 KiB 页构建，独立一次运行）",
+      "output": "checks: 23 no problems——60000 字符行、四列 16 KiB 行、60000 字节中文行三种形状写入与读回逐字节一致，重启与硬杀后仍在；超过 64 KiB 的行干净拒绝且不留残行。"
     },
     {
       "id": "E34",
@@ -1040,11 +1050,11 @@
       "学生引用": "/conversations/20/messages/2/content",
       "学生原话": "那就把页定在 64 KiB，并且要求超限行必须干净拒绝、不留残行，重启和硬杀之后剩下的行还要逐字节一致。",
       "result_evidence": {
-        "pointer": "/experiments/33/output",
-        "quote": "64 KiB 页：同一探针 checks: 23 no problems。"
+        "pointer": "/experiments/47/output",
+        "quote": "checks: 23 no problems——60000 字符行、四列 16 KiB 行、60000 字节中文行三种形状写入与读回逐字节一致，"
       },
-      "结果引用": "/experiments/33/output",
-      "结果原文": "64 KiB 页：同一探针 checks: 23 no problems。"
+      "结果引用": "/experiments/47/output",
+      "结果原文": "checks: 23 no problems——60000 字符行、四列 16 KiB 行、60000 字节中文行三种形状写入与读回逐字节一致，"
     },
     {
       "id": "U5",
@@ -1181,11 +1191,11 @@
       "学生引用": "/conversations/10/messages/0/content",
       "学生原话": "我的判据是：去掉 ORDER BY 与 LIMIT 就正常、把 '10' 换成 10 也正常，只有两者同时出现才死。",
       "result_evidence": {
-        "pointer": "/experiments/6/output",
-        "quote": "修复后：checks: 27297 no problems。"
+        "pointer": "/experiments/46/output",
+        "quote": "checks: 27297 no problems——同一套矩阵，修复前的 1 个问题消失，规模从 13074 项扩到 27297 项仍全绿；"
       },
-      "结果引用": "/experiments/6/output",
-      "结果原文": "修复后：checks: 27297 no problems。"
+      "结果引用": "/experiments/46/output",
+      "结果原文": "checks: 27297 no problems——同一套矩阵，修复前的 1 个问题消失，规模从 13074 项扩到 27297 项仍全绿；"
     },
     {
       "id": "U12",
