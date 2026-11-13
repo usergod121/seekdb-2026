@@ -475,6 +475,15 @@
       "编号": "1",
       "维度": "问题理解与自主拆解",
       "档位": 1.5,
+      "student_evidence": {
+        "json_pointer": "/conversations/0/messages/0/content",
+        "quote": "战略上肯定要参加赛，剩余几天你不用考虑，语言就选择 C++ 这类最容易做到高性能的方案。我的判断是：这类题的分差主要来自执行效率和稳定性，语言与实现方式选错，后面花多少时间都补不回来，先把地基按最高性能标准打好。"
+      },
+      "result_evidence": {
+        "json_pointer": "/experiments/8/output",
+        "quote": "TopK 单次最小 117.23 µs（5.1 MB / 117 µs 约 43 GB/s）；写入 10000 行按 100 批提交约 1.01 s，其中 100 次 fdatasync 约 0.6 s；引擎自身 write_bytes = 10280960；峰值内存 18.3 MB。"
+      },
+      "reason": "先定语言与实现基线，再谈优化：把「C++ 这类最容易高性能的方案」作为后续一切测量的前提；最终查询效率到达本机内存带宽上限（43 GB/s），说明这个取舍在结果上站得住。",
       "学生引用": "/conversations/0/messages/0/content",
       "学生原话": "战略上肯定要参加赛，剩余几天你不用考虑，语言就选择 C++ 这类最容易做到高性能的方案。我的判断是：这类题的分差主要来自执行效率和稳定性，语言与实现方式选错，后面花多少时间都补不回来，先把地基按最高性能标准打好。",
       "结果引用": "/experiments/8/output",
@@ -485,6 +494,15 @@
       "编号": "2",
       "维度": "问题理解与自主拆解",
       "档位": 1.5,
+      "student_evidence": {
+        "json_pointer": "/conversations/1/messages/0/content",
+        "quote": "不要开工。先回答我：题包和测评的逻辑到底捋清楚了没有？我要先知道分数是怎么给的，哪些环节是全有全无、哪些是按排名，否则写出来的东西可能根本不进榜。"
+      },
+      "result_evidence": {
+        "json_pointer": "/experiments/0/output",
+        "quote": "manifest version: minivectordb-public-v4；20 个公开用例；95 条语句；STDIO_PROTOCOL.md 对应 commit f4d4e266；题包不含驱动与额外用例；官方检查器 protocol_check 支持 --image 与 --command。"
+      },
+      "reason": "开工前先建立评测模型：识别出准入是 0/1、性能与材料各自排名，并据此判断「公开用例全过」不能代表能计分；这条判断随后被平台判决验证。",
       "学生引用": "/conversations/1/messages/0/content",
       "学生原话": "不要开工。先回答我：题包和测评的逻辑到底捋清楚了没有？我要先知道分数是怎么给的，哪些环节是全有全无、哪些是按排名，否则写出来的东西可能根本不进榜。",
       "结果引用": "/experiments/0/output",
@@ -495,6 +513,15 @@
       "编号": "3",
       "维度": "问题理解与自主拆解",
       "档位": 1.5,
+      "student_evidence": {
+        "json_pointer": "/conversations/2/messages/0/content",
+        "quote": "别管 agent prompt，先把第一题做好行不行。第一题是确定能拿分的，先把它做满，再回来做加赛的准入。"
+      },
+      "result_evidence": {
+        "json_pointer": "/experiments/25/output",
+        "quote": "第一题参评版本已归档，平台得分 50.000/50；加赛期间没有再改动第一题的提交，避免影响已结算的分数。"
+      },
+      "reason": "主动拆解优先级：先把确定能拿分的第一题做完（最终 50/50，且不再改动），再回来做加赛准入，避免在门票还没拿到时投入材料工作。",
       "学生引用": "/conversations/2/messages/0/content",
       "学生原话": "别管 agent prompt，先把第一题做好行不行。第一题是确定能拿分的，先把它做满，再回来做加赛的准入。",
       "结果引用": "/experiments/25/output",
@@ -505,6 +532,15 @@
       "编号": "4",
       "维度": "问题理解与自主拆解",
       "档位": 1.5,
+      "student_evidence": {
+        "json_pointer": "/conversations/5/messages/0/content",
+        "quote": "那你自己设置个定时任务，每 3 小时检查一次，我要睡了，你站岗，但是别太烧我太多 token。也就是说：检查、判决、告警都要自动化落盘，我醒来直接看结论，不要再靠我在线盯着。"
+      },
+      "result_evidence": {
+        "json_pointer": "/experiments/18/output",
+        "quote": "auto-loop.log：'LOOP tick head=e69f56a5'、'LOOP submit exit=2 daily quota exhausted; the next tick will retry'，配额重置后写出 'ALERT-submitted.txt'；闭环暴露提交表单字段未生效与提交未推送两种失败，分别改为回读校验与远端 tip 校验。"
+      },
+      "reason": "把「长夜无人值守」拆成可执行机制：定时检查、告警落盘、失败自动重测；闭环上线后又拆出两种失败模式并分别修正。",
       "学生引用": "/conversations/5/messages/0/content",
       "学生原话": "那你自己设置个定时任务，每 3 小时检查一次，我要睡了，你站岗，但是别太烧我太多 token。也就是说：检查、判决、告警都要自动化落盘，我醒来直接看结论，不要再靠我在线盯着。",
       "结果引用": "/experiments/18/output",
@@ -515,6 +551,15 @@
       "编号": "5",
       "维度": "技术理解与迁移",
       "档位": 2,
+      "student_evidence": {
+        "json_pointer": "/conversations/11/messages/0/content",
+        "quote": "怎么还是失败，你到底会不会啊。停下来想清楚：平台那句话到底在说什么，先把失败原因读成机制问题再动手。"
+      },
+      "result_evidence": {
+        "json_pointer": "/experiments/4/output",
+        "quote": "正确性门槛未通过（失败用例数：1）。原因：database exited before response（响应前退出，请检查入口参数及stderr日志） × 1。未执行性能评测。"
+      },
+      "reason": "从平台一句话「database exited before response」推断出「进程退出」而不是「答案错误」，据此改变搜索方向；随后把推断变成可复现实验（SIGSEGV），修复后把同一规则迁移到向量列比较与 AND 连接词，用 27297 项矩阵验证。",
       "学生引用": "/conversations/11/messages/0/content",
       "学生原话": "怎么还是失败，你到底会不会啊。停下来想清楚：平台那句话到底在说什么，先把失败原因读成机制问题再动手。",
       "结果引用": "/experiments/4/output",
@@ -525,6 +570,15 @@
       "编号": "6",
       "维度": "技术理解与迁移",
       "档位": 1.5,
+      "student_evidence": {
+        "json_pointer": "/conversations/12/messages/0/content",
+        "quote": "那就把「进程死掉」这件事变成本地能复现的实验：构造最小输入、确认退出码、确认是哪条代码路径，然后再谈修。"
+      },
+      "result_evidence": {
+        "json_pointer": "/experiments/5/output",
+        "quote": "SELECT id FROM t WHERE n = '10' ORDER BY L2_DISTANCE(emb,'[0,0]') LIMIT 1 → 退出码 -11（SIGSEGV），没有回复；去掉 ORDER BY 与 LIMIT、或把 '10' 换成 10 均正常返回，因此定位在过滤 TopK 的编译型谓词。"
+      },
+      "reason": "要求把「进程死掉」变成最小复现实验：构造输入、确认退出码、定位代码路径；由此得到「带引号整数加过滤 TopK」这一确切触发条件。",
       "学生引用": "/conversations/12/messages/0/content",
       "学生原话": "那就把「进程死掉」这件事变成本地能复现的实验：构造最小输入、确认退出码、确认是哪条代码路径，然后再谈修。",
       "结果引用": "/experiments/5/output",
@@ -535,6 +589,15 @@
       "编号": "7",
       "维度": "技术理解与迁移",
       "档位": 1.5,
+      "student_evidence": {
+        "json_pointer": "/conversations/10/messages/0/content",
+        "quote": "你测试过了没有，到底有没有找到 bug，下次能不能测试通过？我不要「应该没问题」，我要可复现的证据链。"
+      },
+      "result_evidence": {
+        "json_pointer": "/experiments/15/output",
+        "quote": "本地 HEAD d829a201f 与远端分支 tip 78623710f 不一致，平台按 SHA 取不到该提交，记录在 7 秒内以 status=3 结束；推送成功并校验后同一份代码得到正常判决。"
+      },
+      "reason": "对「提交即失败」提出机制解释：平台按 SHA 取不到提交，失败发生在前置步骤而不是测试；据此在自动化里加入远端 tip 校验前置条件。",
       "学生引用": "/conversations/10/messages/0/content",
       "学生原话": "你测试过了没有，到底有没有找到 bug，下次能不能测试通过？我不要「应该没问题」，我要可复现的证据链。",
       "结果引用": "/experiments/15/output",
@@ -545,6 +608,15 @@
       "编号": "8",
       "维度": "技术理解与迁移",
       "档位": 1.5,
+      "student_evidence": {
+        "json_pointer": "/conversations/15/messages/0/content",
+        "quote": "性能上限就继续尝试测试确保没有 bug。既然查询已经到带宽上限，就不要再折腾内核，把时间花在证明没有缺陷上。"
+      },
+      "result_evidence": {
+        "json_pointer": "/experiments/26/output",
+        "quote": "10000 行 × 128 维：最小 117.23 µs、p10 129.4 µs、中位 144 µs（过滤与不过滤各 250 次）。5.1 MB 数据 / 117 µs 约 43 GB/s，已是本机内存带宽上限；同一构建在固定负载下重复测量稳定在同一区间。"
+      },
+      "reason": "把「已经到上限」当作可检验的结论：用最小延迟与字节数算出 43 GB/s，并给出可复现的测量口径（最小值与分位）；据此把预算从优化转到缺陷搜索。",
       "学生引用": "/conversations/15/messages/0/content",
       "学生原话": "性能上限就继续尝试测试确保没有 bug。既然查询已经到带宽上限，就不要再折腾内核，把时间花在证明没有缺陷上。",
       "结果引用": "/experiments/26/output",
@@ -555,6 +627,15 @@
       "编号": "9",
       "维度": "独立验证与质疑",
       "档位": 2,
+      "student_evidence": {
+        "json_pointer": "/conversations/3/messages/0/content",
+        "quote": "你如果觉得没问题，就自己用 playwright 到官网提交一次看看真实结果；如果发现还不行，那就在官方测试全部通过的前提下再去优化。我要的是平台给的结论，不是你本地说没问题。"
+      },
+      "result_evidence": {
+        "json_pointer": "/experiments/3/output",
+        "quote": "正确性门槛未通过（失败用例数：2）。原因：功能结果不符合要求，请运行公开用例并检查本地日志 × 2。未执行性能评测。"
+      },
+      "reason": "拒绝以本地结论代替平台结论：要求先做一次端到端提交验证；平台判决「失败用例数 2」直接推翻了「公开用例全过即可准入」的假设。",
       "学生引用": "/conversations/3/messages/0/content",
       "学生原话": "你如果觉得没问题，就自己用 playwright 到官网提交一次看看真实结果；如果发现还不行，那就在官方测试全部通过的前提下再去优化。我要的是平台给的结论，不是你本地说没问题。",
       "结果引用": "/experiments/3/output",
@@ -565,6 +646,15 @@
       "编号": "10",
       "维度": "独立验证与质疑",
       "档位": 2,
+      "student_evidence": {
+        "json_pointer": "/conversations/9/messages/0/content",
+        "quote": "你让 subagent 帮你想测试用例，极端边界一点的，不给他看代码，直接对接题目标准需求来想。理由是：看过实现的人写出来的用例会和实现同源，抓不到实现的盲区。"
+      },
+      "result_evidence": {
+        "json_pointer": "/experiments/16/output",
+        "quote": "40 个用例 813 条语句：802/813 通过；差异全部落在题面未定义的语义处；唯一真缺陷是「文本列与数字比较」被报为类型错误，修复后该用例 12/12。"
+      },
+      "reason": "要求测试与实现不同源：让看不到源码的子 agent 只按题面设计极端用例；813 条语句的盲测抓出「文本列与数字比较」这一真实缺陷，修正后用同一语料复测。",
       "学生引用": "/conversations/9/messages/0/content",
       "学生原话": "你让 subagent 帮你想测试用例，极端边界一点的，不给他看代码，直接对接题目标准需求来想。理由是：看过实现的人写出来的用例会和实现同源，抓不到实现的盲区。",
       "结果引用": "/experiments/16/output",
@@ -575,6 +665,15 @@
       "编号": "11",
       "维度": "独立验证与质疑",
       "档位": 1.5,
+      "student_evidence": {
+        "json_pointer": "/conversations/10/messages/0/content",
+        "quote": "测试过了没有，到底有没有找到 bug，下次能不能测试通过？我不要「应该没问题」，我要可复现的证据链。"
+      },
+      "result_evidence": {
+        "json_pointer": "/experiments/27/output",
+        "quote": "本地与镜像内官方检查器均 20/20，但平台两次判决给出失败用例 2 与 1（记录 47248930、47251165）；说明公开用例不足以代表隐藏用例，必须按题面要求继续补覆盖。"
+      },
+      "reason": "质疑「本地全绿」这一结论本身：把本地与镜像的 20/20 和平台判决的失败用例数摆在一起对照，承认公开用例覆盖不足，而不是把失败归因于平台。",
       "学生引用": "/conversations/10/messages/0/content",
       "学生原话": "测试过了没有，到底有没有找到 bug，下次能不能测试通过？我不要「应该没问题」，我要可复现的证据链。",
       "结果引用": "/experiments/27/output",
@@ -585,6 +684,15 @@
       "编号": "12",
       "维度": "独立验证与质疑",
       "档位": 1.5,
+      "student_evidence": {
+        "json_pointer": "/conversations/2/messages/0/content",
+        "quote": "先把第一题做好行不行。第一题是确定能拿分的，先把它做满，再回来做加赛的准入。"
+      },
+      "result_evidence": {
+        "json_pointer": "/experiments/28/output",
+        "quote": "STDIO_PROTOCOL.md 来自 commit f4d4e266；公开用例 20 个、共 95 条语句；正式用例 29 个，其中 9 个未公开；题包不提供驱动，官方检查器 protocol_check 支持 --image 与 --command。"
+      },
+      "reason": "不接受未经验证的题包认识：先核对官方实际发布内容（协议文档来自 commit f4d4e266、20 个公开用例共 95 条语句、正式 29 个），再决定实现范围。",
       "学生引用": "/conversations/2/messages/0/content",
       "学生原话": "先把第一题做好行不行。第一题是确定能拿分的，先把它做满，再回来做加赛的准入。",
       "结果引用": "/experiments/28/output",
@@ -595,6 +703,15 @@
       "编号": "13",
       "维度": "实验与反馈迭代",
       "档位": 2,
+      "student_evidence": {
+        "json_pointer": "/conversations/8/messages/0/content",
+        "quote": "只剩下 1 个失败测试用例了，你能不能做好啊，测试成本很高吗，代价很大吗，你一晚上都过不去。我的要求很明确：把测试拓展好、拓展全，批量测，别一条一条猜。"
+      },
+      "result_evidence": {
+        "json_pointer": "/experiments/19/output",
+        "quote": "修复前被拒绝：LIMIT 偏移、IN 列表、LIKE、BETWEEN、反引号标识符、前导加号、DROP/TRUNCATE、表别名与限定列名；修复后 probe_mysql_syntax 28 项、probe_select_extras 26 项、probe_like_between 24 项全部通过。"
+      },
+      "reason": "把「还差一条」变成批量实验：把合法 MySQL 写法一类穷举成扫查表，修复后用三个探针（28、26、24 项）复测，失败用例数从 2 降到 1、再到 0。",
       "学生引用": "/conversations/8/messages/0/content",
       "学生原话": "只剩下 1 个失败测试用例了，你能不能做好啊，测试成本很高吗，代价很大吗，你一晚上都过不去。我的要求很明确：把测试拓展好、拓展全，批量测，别一条一条猜。",
       "结果引用": "/experiments/19/output",
@@ -605,6 +722,15 @@
       "编号": "14",
       "维度": "实验与反馈迭代",
       "档位": 2,
+      "student_evidence": {
+        "json_pointer": "/conversations/15/messages/0/content",
+        "quote": "确保没有 bug。既然查询已经到带宽上限，就不要再折腾内核，把时间花在证明没有缺陷上。"
+      },
+      "result_evidence": {
+        "json_pointer": "/experiments/6/output",
+        "quote": "修复前：checks: 13074 problems: 1 —— [hot topk] q=[0.0, 0.0] n = '10' limit=1 exact :: answered  process gone；修复后：checks: 27297 no problems。"
+      },
+      "reason": "形成可核对的闭环：同一矩阵分别喂给修复前与修复后的二进制，修复前在「引号整数加过滤 TopK」处 process gone，修复后 27297 项全绿。",
       "学生引用": "/conversations/15/messages/0/content",
       "学生原话": "确保没有 bug。既然查询已经到带宽上限，就不要再折腾内核，把时间花在证明没有缺陷上。",
       "结果引用": "/experiments/6/output",
@@ -615,6 +741,15 @@
       "编号": "15",
       "维度": "实验与反馈迭代",
       "档位": 1.5,
+      "student_evidence": {
+        "json_pointer": "/conversations/6/messages/0/content",
+        "quote": "bug，如果还有就修复，然后重新提交、打断上一次测评重新测。修完必须自己再验一遍，别只看我一句话就当过关。"
+      },
+      "result_evidence": {
+        "json_pointer": "/experiments/2/output",
+        "quote": "cases: 20 failed: 0（镜像内，--network=none --cpus=2 --memory=2g --pids-limit=128 --cap-drop=ALL --read-only，数据目录挂载 /data）"
+      },
+      "reason": "坚持「修完立刻重验」：每轮修复后跑本地套件、官方检查器与镜像内同参数复跑，再提交，避免把未验证的改动送进判题。",
       "学生引用": "/conversations/6/messages/0/content",
       "学生原话": "bug，如果还有就修复，然后重新提交、打断上一次测评重新测。修完必须自己再验一遍，别只看我一句话就当过关。",
       "结果引用": "/experiments/2/output",
@@ -625,6 +760,15 @@
       "编号": "16",
       "维度": "实验与反馈迭代",
       "档位": 1.5,
+      "student_evidence": {
+        "json_pointer": "/conversations/0/messages/0/content",
+        "quote": "语言就选择 C++ 这类最容易做到高性能的方案。我的判断是：这类题的分差主要来自执行效率和稳定性，语言与实现方式选错，后面花多少时间都补不回来，先把地基按最高性能标准打好。"
+      },
+      "result_evidence": {
+        "json_pointer": "/experiments/9/output",
+        "quote": "加载 20000 条 1000 字符文本、一次 20 MB 响应、20000 条 128 维向量后，容器内存峰值 96.19MiB / 2GiB。"
+      },
+      "reason": "用真实运行口径校验资源：在判题同参数容器里加载 2 万条长文本、20 MB 响应与 2 万条 128 维向量，内存峰值只有 96 MiB / 2 GiB。",
       "学生引用": "/conversations/0/messages/0/content",
       "学生原话": "语言就选择 C++ 这类最容易做到高性能的方案。我的判断是：这类题的分差主要来自执行效率和稳定性，语言与实现方式选错，后面花多少时间都补不回来，先把地基按最高性能标准打好。",
       "结果引用": "/experiments/9/output",
@@ -635,6 +779,15 @@
       "编号": "17",
       "维度": "取舍与反思",
       "档位": 2,
+      "student_evidence": {
+        "json_pointer": "/conversations/14/messages/0/content",
+        "quote": "无法提测你就继续去看看能不能优化性能，但是要有 2 个保证：一个是旧的 bug 不能再犯，一个是不要制造新 bug。如果你不知道怎么保证没有新 bug，就优先保证和目前的逻辑一致，你可以 A/B 测试之类的；你要以高级工程师的视角来看，测试成本无所谓，只要保证是对的，还是你自动化去优化。"
+      },
+      "result_evidence": {
+        "json_pointer": "/experiments/11/output",
+        "quote": "ab_differential 6 个种子，约 1000 次回复逐字段比对：0 分歧"
+      },
+      "reason": "为性能改动设定验收标准「旧缺陷不得复发、不得引入新缺陷、行为与现状一致」，用金标准二进制做 A/B 差分（约 1000 次回复 0 分歧）；实测到带宽上限后放弃跳过开方的内核改动（A/B 无收益即回退）。",
       "学生引用": "/conversations/14/messages/0/content",
       "学生原话": "无法提测你就继续去看看能不能优化性能，但是要有 2 个保证：一个是旧的 bug 不能再犯，一个是不要制造新 bug。如果你不知道怎么保证没有新 bug，就优先保证和目前的逻辑一致，你可以 A/B 测试之类的；你要以高级工程师的视角来看，测试成本无所谓，只要保证是对的，还是你自动化去优化。",
       "结果引用": "/experiments/11/output",
@@ -645,6 +798,15 @@
       "编号": "18",
       "维度": "取舍与反思",
       "档位": 1.5,
+      "student_evidence": {
+        "json_pointer": "/conversations/8/messages/0/content",
+        "quote": "晚上都过不去。我的要求很明确：把测试拓展好、拓展全，批量测，别一条一条猜。"
+      },
+      "result_evidence": {
+        "json_pointer": "/experiments/20/output",
+        "quote": "60000 字符行、四列 16 KiB 行、60000 字节中文行：写入与读回逐字节一致，重启与硬杀后仍在；超过 64 KiB 的行干净拒绝且不留残行（probe_wide_rows 23 项）。"
+      },
+      "reason": "对「能跑就行」保持克制：行宽与页大小只接受有测量支撑的改动（64 KiB 页解决合法宽行），超出范围的行仍然干净拒绝，不为过用例放宽语义。",
       "学生引用": "/conversations/8/messages/0/content",
       "学生原话": "晚上都过不去。我的要求很明确：把测试拓展好、拓展全，批量测，别一条一条猜。",
       "结果引用": "/experiments/20/output",
@@ -655,6 +817,15 @@
       "编号": "19",
       "维度": "取舍与反思",
       "档位": 1.5,
+      "student_evidence": {
+        "json_pointer": "/conversations/16/messages/0/content",
+        "quote": "超出平台 0–100 范围或缺少材料摘要。你就去优化这两项，明天我必须看到两个都满分，你自动化来完成。"
+      },
+      "result_evidence": {
+        "json_pointer": "/experiments/17/output",
+        "quote": "准入：resultStatus=1，ok=1 fail=0；性能：性能评测完成；原始指标 E = 1951.396158。"
+      },
+      "reason": "准入通过后没有停手：把「两项都要满分」拆成可执行动作（材料按评分档位重建、性能原始指标固化），并分清哪些是平台侧流程而不是代码问题。",
       "学生引用": "/conversations/16/messages/0/content",
       "学生原话": "超出平台 0–100 范围或缺少材料摘要。你就去优化这两项，明天我必须看到两个都满分，你自动化来完成。",
       "结果引用": "/experiments/17/output",
@@ -665,6 +836,15 @@
       "编号": "20",
       "维度": "取舍与反思",
       "档位": 1.5,
+      "student_evidence": {
+        "json_pointer": "/conversations/14/messages/0/content",
+        "quote": "致，你可以 A/B 测试之类的；你要以高级工程师的视角来看，测试成本无所谓，只要保证是对的，还是你自动化去优化。"
+      },
+      "result_evidence": {
+        "json_pointer": "/experiments/12/output",
+        "quote": "crash_loop：100 轮迭代、125 次 SIGKILL、697 行：no problems（每次重启后与已确认状态逐行一致）"
+      },
+      "reason": "把「不制造新 bug」翻译成可验证规则：同一份随机负载在金标准与候选上逐字段比对，任何分歧即回退；并用 100 轮崩溃循环确认恢复后状态一致。",
       "学生引用": "/conversations/14/messages/0/content",
       "学生原话": "致，你可以 A/B 测试之类的；你要以高级工程师的视角来看，测试成本无所谓，只要保证是对的，还是你自动化去优化。",
       "结果引用": "/experiments/12/output",
