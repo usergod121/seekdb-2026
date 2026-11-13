@@ -113,7 +113,7 @@ Err Database::open(const std::string& data_dir) {
   }
 
   if (const char* policy = ::getenv("MVDB_SYNC_POLICY")) {
-    sync_policy_grouped_ = (std::strcmp(policy, "strict") != 0);
+    sync_policy_grouped_ = (std::strcmp(policy, "grouped") == 0);
   }
   if (const char* window = ::getenv("MVDB_SYNC_WINDOW_MS")) {
     const int parsed = std::atoi(window);
