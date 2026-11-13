@@ -820,10 +820,10 @@
       "学生原话": "那就把页定在 64 KiB，并且要求超限行必须干净拒绝、不留残行，重启和硬杀之后剩下的行还要逐字节一致。",
       "result_evidence": {
         "pointer": "/experiments/33/output",
-        "quote": "8 KiB 页：probe_wide_rows checks: 23 problems: 16"
+        "quote": "64 KiB 页：同一探针 checks: 23 no problems。"
       },
       "结果引用": "/experiments/33/output",
-      "结果原文": "8 KiB 页：probe_wide_rows checks: 23 problems: 16"
+      "结果原文": "64 KiB 页：同一探针 checks: 23 no problems。"
     },
     {
       "id": "U5",
@@ -1139,15 +1139,15 @@
       "编号": "U20",
       "维度": "实验与反馈迭代",
       "实例主题": "性能上限之后，预算转去证明没有 bug",
-      "对话定位": "/conversations/13/messages/2/content",
+      "对话定位": "/conversations/13/messages/0/content",
       "student_evidence": {
-        "pointer": "/conversations/13/messages/2/content",
-        "quote": "117 µs 对应 43 GB/s，这个数字说明已经在内存带宽上，继续调内核是白花时间；"
+        "pointer": "/conversations/13/messages/0/content",
+        "quote": "但是先把「到上限」这件事量出来：数据量、耗时、折算带宽，我要看到数字再决定收手。"
       },
-      "档位": 1.5,
+      "档位": 1.0,
       "reason": "要求先把「到上限」量化（数据量、耗时、折算带宽）再决定收手；拿到 117.23 µs ≈ 43 GB/s 后据此改变投入方向，把验收标准从「更快」改成「证明没坏」，属于解释结果→调整方案→继续验证。",
-      "学生引用": "/conversations/13/messages/2/content",
-      "学生原话": "117 µs 对应 43 GB/s，这个数字说明已经在内存带宽上，继续调内核是白花时间；",
+      "学生引用": "/conversations/13/messages/0/content",
+      "学生原话": "但是先把「到上限」这件事量出来：数据量、耗时、折算带宽，我要看到数字再决定收手。",
       "result_evidence": {
         "pointer": "/experiments/26/output",
         "quote": "最小 117.23 µs、p10 129.4 µs、中位 144 µs"
@@ -1253,15 +1253,15 @@
       "编号": "U26",
       "维度": "取舍与反思",
       "实例主题": "测量噪声比要优化的量还大时，停手",
-      "对话定位": "/conversations/25/messages/2/content",
+      "对话定位": "/conversations/25/messages/0/content",
       "student_evidence": {
-        "pointer": "/conversations/25/messages/2/content",
-        "quote": "线程数从 1 到 4 没有可测差别，说明早就到带宽上限；重复跑的中位数能从 153 µs 跳到 116 µs，比任何内核微调都大。结论：内核不再改，"
+        "pointer": "/conversations/25/messages/0/content",
+        "quote": "我怀疑现在测出来的「提升」有一半是噪声。做两件事：把扫描线程数 1/2/3/4 各跑一遍，再把同一份二进制重复跑三次；如果线程数和重复跑的差异比我要优化的幅度还大，那这个方向就该停。"
       },
-      "档位": 1.5,
+      "档位": 1.0,
       "reason": "怀疑「提升」有一半是噪声，要求先测线程数 1/2/3/4 与同一二进制重复三次；看到线程数无可测差别、重复跑波动大于任何内核微调的幅度后，主动停止该方向并把判据固化为「先 A/B 差分、再看是否超过噪声带」，是基于测量的取舍。",
-      "学生引用": "/conversations/25/messages/2/content",
-      "学生原话": "线程数从 1 到 4 没有可测差别，说明早就到带宽上限；重复跑的中位数能从 153 µs 跳到 116 µs，比任何内核微调都大。结论：内核不再改，",
+      "学生引用": "/conversations/25/messages/0/content",
+      "学生原话": "我怀疑现在测出来的「提升」有一半是噪声。做两件事：把扫描线程数 1/2/3/4 各跑一遍，再把同一份二进制重复跑三次；如果线程数和重复跑的差异比我要优化的幅度还大，那这个方向就该停。",
       "result_evidence": {
         "pointer": "/experiments/35/output",
         "quote": "同一二进制重复三次：最小 99.77 / 95.05 / 92.97 µs，中位 152.97 / 138.63 / 115.63 µs。"
