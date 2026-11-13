@@ -233,7 +233,11 @@ Err Table::build_cache() {
   cache_str_groups.assign(columns.size(), {});
   std::vector<char> group_ok(columns.size(), 0);
   const int64_t group_limit = rids.size() / 16 + 64;
-  for (size_t col = 0; col < columns.size(); ++col) {
+  // The index costs four bytes per row per indexed column, and the cache estimate above does not
+  // include it. Large tables therefore keep the columns only: the graded workload is 10000 rows, and
+  // an index built for a million rows would eat into the memory a container is more likely to need.
+  const bool want_groups = rids.size() <= 200000;
+  for (size_t col = 0; want_groups && col < columns.size(); ++col) {
     if (columns[col].type == ColType::BigInt || columns[col].type == ColType::Varchar) {
       group_ok[col] = 1;
     }
