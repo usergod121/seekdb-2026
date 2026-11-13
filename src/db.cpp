@@ -148,8 +148,14 @@ Err Database::close() {
     // The pages are a second copy of state the log already holds, so writing them adds page_bytes of
     // I/O and saves only the replay at the next start. Keep the log unless it has grown past what a
     // start can replay quickly; that bounds restart time without paying for the copy.
-    constexpr int64_t kMaxReplayLogBytes = 256LL << 20;
-    keep_log = wal_bytes > 0 && wal_bytes <= kMaxReplayLogBytes;
+    int64_t max_replay = 256LL << 20;
+    // The threshold is overridable so the checkpoint branch stays covered by tests: a small bound makes
+    // the next close take the other path on purpose.
+    if (const char* override_bytes = ::getenv("MVDB_LOG_CHECKPOINT_BYTES")) {
+      const long long parsed = std::atoll(override_bytes);
+      if (parsed > 0) max_replay = static_cast<int64_t>(parsed);
+    }
+    keep_log = wal_bytes > 0 && wal_bytes <= max_replay;
     if (Prof::on()) {
       std::fprintf(stderr, "[profile] close: wal_bytes=%lld dirty_page_bytes=%lld keep_log=%d\n",
                    static_cast<long long>(wal_bytes), static_cast<long long>(page_bytes),
@@ -254,7 +260,9 @@ Err Database::wal_append(const std::string& sql) {
   const uint32_t len = static_cast<uint32_t>(sql.size());
   rec.append(reinterpret_cast<const char*>(&len), 4);
   rec += sql;
-  return write_all(wal_fd_, rec.data(), rec.size()) ? Err::Ok : Err::IoError;
+  const bool ok = write_all(wal_fd_, rec.data(), rec.size());
+  if (ok && Prof::on()) Prof::count_bytes(kProfBytesWal, static_cast<int64_t>(rec.size()));
+  return ok ? Err::Ok : Err::IoError;
 }
 
 Err Database::wal_sync() {
@@ -267,6 +275,7 @@ Err Database::wal_commit() {
   if (wal_fd_ < 0) return Err::IoError;
   const char kCommit = 'C';
   if (!write_all(wal_fd_, &kCommit, 1)) return Err::IoError;
+  if (Prof::on()) Prof::count_bytes(kProfBytesWal, 1);
   return wal_sync();
 }
 

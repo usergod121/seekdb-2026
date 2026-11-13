@@ -22,6 +22,8 @@ enum ProfSlot {
   kProfJson,
   kProfSplit,
   kProfCopyStmt,
+  kProfBytesWal,
+  kProfBytesPage,
   kProfSlots
 };
 
@@ -39,6 +41,8 @@ inline const char* prof_name(const int slot) {
     case kProfJson: return "json-request";
     case kProfSplit: return "split-statements";
     case kProfCopyStmt: return "copy-statement";
+    case kProfBytesWal: return "bytes-log";
+    case kProfBytesPage: return "bytes-pages";
     default: return "?";
   }
 }
@@ -56,6 +60,11 @@ class Prof {
 
   static void add(const int slot, const uint64_t delta) {
     nanos_[slot] += delta;
+    ++calls_[slot];
+  }
+
+  static void count_bytes(const int slot, const int64_t bytes) {
+    nanos_[slot] += static_cast<uint64_t>(bytes);
     ++calls_[slot];
   }
 

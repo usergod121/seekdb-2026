@@ -1,4 +1,5 @@
 #include "storage/pager.h"
+#include "prof.h"
 
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -99,6 +100,7 @@ Err Pager::close_discarding_dirty() {
 
 Err Pager::write_back(Frame* f) {
   if (!f->dirty) return Err::Ok;
+  if (Prof::on()) Prof::count_bytes(kProfBytesPage, kPageSize);
   if (!pwrite_all(fd_, f->data, kPageSize, static_cast<off_t>(f->page_id) * kPageSize)) {
     return Err::IoError;
   }
