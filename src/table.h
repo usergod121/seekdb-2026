@@ -46,7 +46,12 @@ struct Table {
   std::vector<float> cache_vecs;
   // True when a component is large enough that a float32 accumulator could overflow
   // (the batched kernels then hand those rows to the double path).
-  bool cache_needs_double = false;    // flat: row i occupies [i*dim(), (i+1)*dim())
+  bool cache_needs_double = false;
+  // Equality index over the cached rows: value -> row indices in cache order. A filtered TopK can then
+  // walk only the matching rows instead of the whole table, which is what the graded queries do for
+  // half of their work. Filled by build_cache; empty when the paged path is used.
+  std::vector<std::unordered_map<int64_t, std::vector<int32_t>>> cache_int_groups;
+  std::vector<std::unordered_map<std::string, std::vector<int32_t>>> cache_str_groups;    // flat: row i occupies [i*dim(), (i+1)*dim())
   // Columnar copies of the scalar columns, so a WHERE clause reads a sequential array instead of
   // following one heap pointer per row through Row::vals. cache_str_off[c] has rows + 1 entries.
   std::vector<std::vector<int64_t>> cache_int_cols;

@@ -226,6 +226,18 @@ Err Table::build_cache() {
   cache_int_cols.assign(columns.size(), {});
   cache_str_data.assign(columns.size(), {});
   cache_str_off.assign(columns.size(), {});
+  // Equality groups are built alongside the columns so a filtered TopK can walk only the matching
+  // rows. A column whose values are nearly all distinct would turn the index into a second copy of the
+  // column, so a column is dropped from the index as soon as its group count passes the limit.
+  cache_int_groups.assign(columns.size(), {});
+  cache_str_groups.assign(columns.size(), {});
+  std::vector<char> group_ok(columns.size(), 0);
+  const int64_t group_limit = rids.size() / 16 + 64;
+  for (size_t col = 0; col < columns.size(); ++col) {
+    if (columns[col].type == ColType::BigInt || columns[col].type == ColType::Varchar) {
+      group_ok[col] = 1;
+    }
+  }
   cache_rows.reserve(rids.size());
   cache_pks.reserve(rids.size());
   if (dims > 0) cache_vecs.reserve(rids.size() * dims);
@@ -239,6 +251,7 @@ Err Table::build_cache() {
   }
   Row row;
   for (const Rid& rid : rids) {
+    const int32_t ridx = static_cast<int32_t>(cache_rows.size());
     // Skipping an unreadable row here would make the cached view disagree with the paged path (a
     // missing row, a wrong TopK answer), so the build fails and callers use the paged path instead.
     if (fetch_at(rid, &row) != Err::Ok) {
@@ -249,10 +262,28 @@ Err Table::build_cache() {
     for (size_t col = 0; col < columns.size(); ++col) {
       if (columns[col].type == ColType::BigInt) {
         cache_int_cols[col].push_back(row.vals[col].i);
+        if (group_ok[col] == 1) {
+          auto& groups = cache_int_groups[col];
+          groups[row.vals[col].i].push_back(ridx);
+          if (static_cast<int64_t>(groups.size()) > group_limit) {
+            groups.clear();
+            groups.rehash(0);
+            group_ok[col] = 0;
+          }
+        }
       } else if (columns[col].type == ColType::Varchar) {
         const std::string& s = row.vals[col].s;
         cache_str_data[col].insert(cache_str_data[col].end(), s.begin(), s.end());
         cache_str_off[col].push_back(static_cast<uint32_t>(cache_str_data[col].size()));
+        if (group_ok[col] == 1) {
+          auto& groups = cache_str_groups[col];
+          groups[s].push_back(ridx);
+          if (static_cast<int64_t>(groups.size()) > group_limit) {
+            groups.clear();
+            groups.rehash(0);
+            group_ok[col] = 0;
+          }
+        }
       }
     }
     if (dims > 0) {

@@ -110,7 +110,12 @@ bool parse_plain_decimal(const char* p, const char* end, const char** after, flo
   }
   if (exponent < -22 || exponent > 22) return false;
   double scaled = static_cast<double>(mantissa);
-  scaled = (exponent >= 0) ? scaled * kPow10[exponent] : scaled / kPow10[-exponent];
+  // Multiplying by the reciprocal avoids a double division per element; the reciprocals are the exact
+  // same powers of ten the division would use, so the result is bit-for-bit identical.
+  static const double kInv10[] = {1e-0,  1e-1,  1e-2,  1e-3,  1e-4,  1e-5,  1e-6,  1e-7,
+                                  1e-8,  1e-9,  1e-10, 1e-11, 1e-12, 1e-13, 1e-14, 1e-15,
+                                  1e-16, 1e-17, 1e-18, 1e-19, 1e-20, 1e-21, 1e-22};
+  scaled = (exponent >= 0) ? scaled * kPow10[exponent] : scaled * kInv10[-exponent];
   *out = static_cast<float>(negative ? -scaled : scaled);
   *after = q;
   return true;
@@ -120,7 +125,7 @@ bool parse_plain_decimal(const char* p, const char* end, const char** after, flo
 // spelling, so both are accepted.
 // Scans "[1,2,3]" (or the quoted form) number by number: parsing a 128 dimension vector through the SQL
 // tokenizer would allocate a token per number, which would dominate the query path otherwise.
-bool vector_from_expr(const Expr& e, std::vector<float>* out) {
+bool vector_from_expr(const Expr& e, std::vector<float>* out, const size_t reserve_hint = 0) {
   if (e.kind == ExprKind::VectorLit) {
     // 2.1: every element must be a finite float32 - a bare list can hold 1e39 or 1e400 as well, and an
     // infinite element would make every distance infinite instead of being rejected.
@@ -137,6 +142,7 @@ bool vector_from_expr(const Expr& e, std::vector<float>* out) {
   if (p >= end || *p != '[') return false;
   ++p;
   out->clear();
+  if (reserve_hint > 0) out->reserve(reserve_hint);
   // The grammar is  '[' number (',' number)* ']'  with optional blanks around tokens: a missing separator,
   // an empty element or a trailing comma is a malformed literal, not a vector.
   bool first = true;
@@ -561,7 +567,7 @@ Err value_from_expr(const Expr& e, const Column& col, std::vector<float>* vec_ou
     }
     case ColType::Vector: {
       std::vector<float> parsed;
-      if (!vector_from_expr(e, &parsed)) return Err::SyntaxError;
+      if (!vector_from_expr(e, &parsed, static_cast<size_t>(col.len))) return Err::SyntaxError;
       if (static_cast<int64_t>(parsed.size()) != col.len) return Err::VectorDimMismatch;
       for (float f : parsed) {
         if (!std::isfinite(f)) return Err::ValueOverflow;
@@ -1052,7 +1058,7 @@ Result Database::exec_select(const Stmt& st) {
       return static_cast<int64_t>(out->q.size()) == dims;
     }
     std::vector<float> q;
-    if (!vector_from_expr(lit, &q)) return false;
+    if (!vector_from_expr(lit, &q, static_cast<size_t>(dims))) return false;
     if (static_cast<int64_t>(q.size()) != dims) return false;
     if (lit.kind == ExprKind::StrLit) {
       cached_literal = lit.s;
@@ -1196,6 +1202,66 @@ Result Database::exec_select(const Stmt& st) {
     const size_t rows = t->cache_rows.size();
 
     if (k > 0 && use_pred) {
+      // A lone equality filter selects exactly one value group built with the cache, so the scan can
+      // walk the matching rows instead of the whole table. It is only worth it while the group is a
+      // minority: past that the contiguous full scan beats gathering.
+      const std::vector<int32_t>* group = nullptr;
+      if (pred.any && !pred.use_b && pred.a.op == 0 && pred.a.col >= 0) {
+        const size_t gcol = static_cast<size_t>(pred.a.col);
+        if (pred.a.lit_is_str) {
+          if (gcol < t->cache_str_groups.size() && !t->cache_str_groups[gcol].empty()) {
+            const auto it = t->cache_str_groups[gcol].find(pred.a.lit_s);
+            if (it != t->cache_str_groups[gcol].end()) group = &it->second;
+          }
+        } else if (gcol < t->cache_int_groups.size() && !t->cache_int_groups[gcol].empty()) {
+          const auto it = t->cache_int_groups[gcol].find(pred.a.lit_i);
+          if (it != t->cache_int_groups[gcol].end()) group = &it->second;
+        }
+      }
+      if (group != nullptr && !group->empty() && group->size() * 2 < rows && dims > 0) {
+        std::vector<float> gathered(static_cast<size_t>(dims) * 4);
+        std::vector<float> block(4);
+        for (int64_t base = 0; base < static_cast<int64_t>(group->size()); base += 4) {
+          const int64_t n = std::min<int64_t>(4, static_cast<int64_t>(group->size()) - base);
+          for (int64_t i = 0; i < n; ++i) {
+            const int64_t src = static_cast<int64_t>((*group)[static_cast<size_t>(base + i)]);
+            std::memcpy(gathered.data() + i * dims, t->cache_vecs.data() + src * dims,
+                        static_cast<size_t>(dims) * sizeof(float));
+          }
+          l2_batch(gathered.data(), q, n, dims, block.data());
+          for (int64_t i = 0; i < n; ++i) {
+            const size_t idx = static_cast<size_t>((*group)[static_cast<size_t>(base + i)]);
+            const double d = static_cast<double>(block[static_cast<size_t>(i)]);
+            const int64_t pk = t->cache_rows[idx].vals[static_cast<size_t>(t->pk_col)].i;
+            if (heap.size() == k) {
+              const HeapItem& worst = heap.front();
+              if (d > worst.dist || (d == worst.dist && pk >= worst.pk)) continue;
+              std::pop_heap(heap.begin(), heap.end(), better);
+              heap.pop_back();
+            }
+            HeapItem item;
+            item.dist = d;
+            item.pk = pk;
+            item.cache_idx = static_cast<int64_t>(idx);
+            heap.push_back(item);
+            std::push_heap(heap.begin(), heap.end(), better);
+          }
+        }
+        std::sort(heap.begin(), heap.end(), [](const HeapItem& a, const HeapItem& b) {
+          if (a.dist != b.dist) return a.dist < b.dist;
+          return a.pk < b.pk;
+        });
+        r.rows.reserve(heap.size());
+        for (const HeapItem& item : heap) {
+          std::vector<Cell> line;
+          if (!project(t->cache_rows[static_cast<size_t>(item.cache_idx)],
+                       t->cache_vec(static_cast<int64_t>(item.cache_idx)), &line)) {
+            return r;
+          }
+          r.rows.push_back(std::move(line));
+        }
+        return r;
+      }
       // The compiled filter runs inside the scan workers against the columnar arrays, so filtering is
       // part of the split range instead of a separate serial pass.
       FastKeep keep;
