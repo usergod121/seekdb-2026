@@ -1,4 +1,5 @@
 #include "db.h"
+#include "prof.h"
 #include "protocol/splitter.h"
 
 #include <fcntl.h>
@@ -207,6 +208,7 @@ Err Database::load_catalog() {
 // ---- WAL ------------------------------------------------------------------
 
 Err Database::wal_append(const std::string& sql) {
+  ProfScope prof(kProfWalAppend);
   if (wal_fd_ < 0) return Err::IoError;
   std::string rec;
   rec.reserve(sql.size() + 5);
@@ -223,6 +225,7 @@ Err Database::wal_sync() {
 }
 
 Err Database::wal_commit() {
+  ProfScope prof(kProfWalCommit);
   if (wal_fd_ < 0) return Err::IoError;
   const char kCommit = 'C';
   if (!write_all(wal_fd_, &kCommit, 1)) return Err::IoError;
@@ -366,7 +369,10 @@ Result Database::execute(const std::string& sql_text) {
   // first failure wins, an affected-row count is summed, and a query result is the last one produced.
   mv::Splitter splitter;
   std::vector<std::string> statements;
-  splitter.feed(sql_text + "\n", &statements);
+  {
+    ProfScope prof_split(kProfSplit);
+    splitter.feed(sql_text + "\n", &statements);
+  }
   const std::string& tail = splitter.pending();
   bool tail_blank = true;
   for (const char c : tail) {
@@ -426,11 +432,15 @@ Result Database::execute_one(const std::string& sql_text) {
     res.message = "empty statement";
     return res;
   }
+  const uint64_t prof_copy_start = Prof::on() ? Prof::now() : 0;
   const std::string sql = sql_text.substr(b, e - b);
+  if (Prof::on()) Prof::add(kProfCopyStmt, Prof::now() - prof_copy_start);
 
   Stmt st;
   std::string perr;
+  const uint64_t prof_parse_start = Prof::on() ? Prof::now() : 0;
   const Err prc = parse_statement(sql, &st, &perr);
+  if (Prof::on()) Prof::add(kProfParse, Prof::now() - prof_parse_start);
   if (prc != Err::Ok) {
     res.err = prc;
     res.message = perr;

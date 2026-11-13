@@ -1,6 +1,6 @@
 {
   "schema": "agent-learning-evidence-v3-unbounded material for question 600081 (MiniVectorDB)",
-  "材料摘要": "本材料是对加赛题「MiniVectorDB」（C++17、零依赖、JSON Lines over STDIO 的执行引擎）的一次完整开发记录，包含 31 轮学生与 Agent 的对话、41 项真实命令与输出、以及 24 个证据实例。学生贡献体现为：把评分链路拆成准入 0/1 与两处排名、把「只剩一个失败用例」重定义为按类别穷举、要求用不看源码的子 agent 按题面设计语料并只认唯一真缺陷、坚持平台端到端结论而非本地绿灯、为性能改动设 A/B 金标准与三条并行验收、并主动要求测量自己方案的失效边界（高基数索引、测量噪声）后停止该方向。所有实验输出均为本次运行的原始记录（路径与账号已脱敏），没有编造交互或结果。",
+  "材料摘要": "本材料是对加赛题「MiniVectorDB」（C++17、零依赖、JSON Lines over STDIO 的执行引擎）的一次完整开发记录，包含 33 轮学生与 Agent 的对话、43 项真实命令与输出、以及 26 个证据实例。学生贡献体现为：把评分链路拆成准入 0/1 与两处排名、把「只剩一个失败用例」重定义为按类别穷举、要求用不看源码的子 agent 按题面设计语料并只认唯一真缺陷、坚持平台端到端结论而非本地绿灯、为性能改动设 A/B 金标准与三条并行验收、并主动要求测量自己方案的失效边界（高基数索引、测量噪声）后停止该方向。所有实验输出均为本次运行的原始记录（路径与账号已脱敏），没有编造交互或结果。",
   "阅读说明": "阅读顺序：先看 conversations（学生发言为本人方向与判断，Agent 发言为执行与回报；部分轮次带学生追问，即学生读到结果后的判断与下一步要求），再看 experiments（真实命令与输出原文），最后看证据实例。每条实例给出维度、档位、student_evidence（学生原文的 RFC6901 指针与精确片段）与 result_evidence（实验结果原文的指针与精确片段），两者不重叠、跨实例也不重复；同一问题或修正链只在一个维度里计一次。档位只按证据链走到哪一步给：给了预测或判据但无结果为 0.5（且不填结果引用），有实际验证结果为 1，学生读到结果、据此修正并再复测为 1.5；本次材料没有把任何实例标为 2。",
   "conversations": [
     {
@@ -598,6 +598,58 @@
           "content": "按 memory.max/8 夹逼 64–512 MiB 定稿；夹逼下限那一档实测与默认预算同速（最小 93.19 对 93.12 µs），说明下限确实落在拐点之上，退化为分页的代价约 18.8 倍也一并写进设计与材料。"
         }
       ]
+    },
+    {
+      "轮次": 32,
+      "主题": "把写路径拆成阶段再动手",
+      "messages": [
+        {
+          "id": "S32",
+          "source": "学生",
+          "content": "上次只量到「解析约 9 µs/行」，那是猜的。我要按阶段拆：请求 JSON 解析、语句切分、SQL 词法/语法、值解析、行编码、页写入、WAL 追加、刷盘，每段各占多少毫秒，先把钱花在哪里的账算清楚，再选一处动。"
+        },
+        {
+          "id": "A32",
+          "source": "Agent",
+          "content": "加了一个环境变量开关的阶段剖析器（默认关闭）。10000 行 128 维、100 批：wal-commit（fdatasync）591.7 ms、insert-loop 23.9、parse 20.0、json-request 15.1、split 8.4、wal-append 6.7、copy-statement 1.0；扣掉刷盘，自有工作约 75 ms。"
+        },
+        {
+          "id": "S32b",
+          "source": "学生",
+          "content": "自有工作里 json 和 parse 两项加起来 35 ms，比值解析还大，说明瓶颈在「文本进得来」这一段而不是数值计算；先只改这两处的逐字节 push_back（字符串按整段拷一次），别碰语义，改完用剖面上的同一阶段对比，不看端到端总时间——总时间被刷盘噪声盖住了。"
+        },
+        {
+          "id": "A32b",
+          "source": "Agent",
+          "content": "改动后同机三次取最小：parse 19.71 → 12.40 ms（−37%），json-request 15.1 → 10.5 ms（−32%）；语义侧 probe_matrix 27297、probe_order_matrix 3841、probe_reject_all 645、probe_protocol_fuzz 564、ab_differential 2636 条回复 0 分歧、官方用例 95/95 全绿。"
+        }
+      ]
+    },
+    {
+      "轮次": 33,
+      "主题": "不是每个改动都有收益：分配复用那次",
+      "messages": [
+        {
+          "id": "S33",
+          "source": "学生",
+          "content": "同一轮里我还想动 insert-loop：每行都新建 Row、payload 和向量缓冲，等于每行三次分配。先量再定：如果拆开看没有可测收益，就别留着当战绩，也别为了它冒风险。"
+        },
+        {
+          "id": "A33",
+          "source": "Agent",
+          "content": "把表名小写提到循环外、复用 Row/编码缓冲/向量缓冲后复测：insert-loop 24.6–27.4 ms，改动前是 23.9–27.0 ms，落在噪声内；分配次数确实降了，但耗时没有可测变化。"
+        },
+        {
+          "id": "S33b",
+          "source": "学生",
+          "content": "那就按「收益必须大于噪声」的规矩记账：这一处不算优化，只作为减少分配的顺手整理保留，材料里写清楚它没有可测收益，别把它算进性能故事里。"
+        },
+        {
+          "id": "A33b",
+          "source": "Agent",
+          "content": "按此记录：本轮计入性能的只有 json（−32%）与 parse（−37%）两处，分配复用记作无收益整理；下一步要动的是值解析（insert-loop 里约 13–15 ms），并要用同一剖面复测。"
+        }
+      ]
     }
   ],
   "experiments": [
@@ -800,6 +852,16 @@
       "id": "E41",
       "command": "bash tests/bench_cache_budget.sh  # 1/8/64 MiB 与默认预算各跑同一组 500 次查询",
       "output": "1 MiB  min_us 1751.51 p10 1831.44 median 2163.93 mean 2242.86；8 MiB  min_us 1752.79 p10 1854.62 median 2262.23 mean 2201.54（仍走分页路径）；64 MiB min_us 93.19 p10 97.64 median 119.03 mean 153.36；默认   min_us 93.12 p10 96.45 median 115.44 mean 139.40。拐点落在 8–64 MiB 之间，退化约 18.8 倍。"
+    },
+    {
+      "id": "E42",
+      "command": "python3 tests/profile_write.py --batches 100  # 阶段剖析，10000 行 128 维",
+      "output": "wal-commit 591.697 ms（101 次，5.86 ms/次）；insert-loop 23.914；parse 19.951；json-request 15.079；split-statements 8.350；wal-append 6.658；copy-statement 1.047；encode-row 6.371（10000 次）；heap-insert 3.081；pk-index 0.963。扣掉刷盘后自有工作约 75 ms。"
+    },
+    {
+      "id": "E43",
+      "command": "同一剖面复测：python3 tests/profile_write.py --batches 100，三次取最小，并用金标准之外的对照树（未改动的 HEAD 构建）做同机对比",
+      "output": "对照树 parse 19.71 / 22.07 / 19.84 ms，候选 12.77 / 12.40 / 12.76 ms（最小 19.71 → 12.40，−37%）；json-request 对照 15.1 ms，候选 10.5 / 10.9 / 11.1 ms（−32%）；insert-loop 对照 23.9–27.0 ms，候选 24.6–27.4 ms（噪声内）；语义侧 probe_matrix 27297、probe_order_matrix 3841、probe_reject_all 645、probe_protocol_fuzz 564、ab_differential 2636 条回复 0 分歧、官方用例 95/95。"
     },
     {
       "id": "E34",
@@ -1255,6 +1317,48 @@
     {
       "id": "U23",
       "编号": "U23",
+      "维度": "技术理解与迁移",
+      "实例主题": "把写路径拆成阶段再动手",
+      "对话定位": "/conversations/31/messages/2/content",
+      "student_evidence": {
+        "pointer": "/conversations/31/messages/2/content",
+        "quote": "自有工作里 json 和 parse 两项加起来 35 ms，比值解析还大，说明瓶颈在「文本进得来」这一段而不是数值计算；"
+      },
+      "档位": 1.5,
+      "reason": "不满足于「解析约 9 µs/行」这个旧估算，要求把写路径拆成八个可测阶段再决定动哪里；读到 json+parse 合计 35 ms 后把方向从数值计算纠正到文本入口，并限定只改「逐字节 push_back 改整段拷贝」这种不触语义的替换；改动后同一剖面 parse −37%、json −32%，语义侧矩阵与差分全绿，是解释结果→修正方案→复测的完整链。",
+      "学生引用": "/conversations/31/messages/2/content",
+      "学生原话": "自有工作里 json 和 parse 两项加起来 35 ms，比值解析还大，说明瓶颈在「文本进得来」这一段而不是数值计算；",
+      "result_evidence": {
+        "pointer": "/experiments/41/output",
+        "quote": "对照树 parse 19.71 / 22.07 / 19.84 ms，候选 12.77 / 12.40 / 12.76 ms（最小 19.71 → 12.40，−37%）；"
+      },
+      "结果引用": "/experiments/41/output",
+      "结果原文": "对照树 parse 19.71 / 22.07 / 19.84 ms，候选 12.77 / 12.40 / 12.76 ms（最小 19.71 → 12.40，−37%）；"
+    },
+    {
+      "id": "U24",
+      "编号": "U24",
+      "维度": "取舍与反思",
+      "实例主题": "不是每个改动都有收益：分配复用那次",
+      "对话定位": "/conversations/32/messages/2/content",
+      "student_evidence": {
+        "pointer": "/conversations/32/messages/2/content",
+        "quote": "那就按「收益必须大于噪声」的规矩记账：这一处不算优化，只作为减少分配的顺手整理保留，"
+      },
+      "档位": 1.5,
+      "reason": "对同一轮里的第三处改动（分配复用）主动按噪声带判定：预判「没有可测收益就别当战绩」，复测显示 insert-loop 落在噪声内，于是明确把它记为无收益整理、不计入性能故事，并留下「收益必须大于噪声」的记账规矩——这是用测量结果否定自己方案的取舍分析。",
+      "学生引用": "/conversations/32/messages/2/content",
+      "学生原话": "那就按「收益必须大于噪声」的规矩记账：这一处不算优化，只作为减少分配的顺手整理保留，",
+      "result_evidence": {
+        "pointer": "/experiments/41/output",
+        "quote": "insert-loop 对照 23.9–27.0 ms，候选 24.6–27.4 ms（噪声内）；"
+      },
+      "结果引用": "/experiments/41/output",
+      "结果原文": "insert-loop 对照 23.9–27.0 ms，候选 24.6–27.4 ms（噪声内）；"
+    },
+    {
+      "id": "U25",
+      "编号": "U25",
       "维度": "取舍与反思",
       "实例主题": "缓存预算该给多少：把拐点量出来",
       "对话定位": "/conversations/30/messages/0/content",
@@ -1274,8 +1378,8 @@
       "结果原文": "1 MiB  min_us 1751.51 p10 1831.44 median 2163.93 mean 2242.86；"
     },
     {
-      "id": "U24",
-      "编号": "U24",
+      "id": "U26",
+      "编号": "U26",
       "维度": "取舍与反思",
       "实例主题": "没量过的那一项：磁盘 I/O 与写入放大",
       "对话定位": "/conversations/29/messages/2/content",

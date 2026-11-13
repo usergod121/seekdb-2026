@@ -33,6 +33,9 @@ bool is_ident_char(const unsigned char c) {
 
 bool tokenize(const std::string& sql, std::vector<Token>* out, std::string* err) {
   out->clear();
+  // A token costs at least a few input bytes, so this bounds the number of reallocations for a large
+  // statement without overshooting much on small ones.
+  out->reserve(sql.size() / 8 + 8);
   size_t i = 0;
   const size_t n = sql.size();
   while (i < n) {
@@ -129,6 +132,32 @@ bool tokenize(const std::string& sql, std::vector<Token>* out, std::string* err)
     } else if (c == '\'' || c == '"') {
       const char quote = static_cast<char>(c);
       size_t j = i + 1;
+      // Fast path: scan to the closing quote and copy the run in one go. Any escape, doubled quote or
+      // early end falls through to the general loop below, which produces the same payload.
+      size_t scan = j;
+      bool plain = true;
+      while (scan < n) {
+        const char sc = sql[scan];
+        if (sc == quote) {
+          if (scan + 1 < n && sql[scan + 1] == quote) {  // doubled quote: not the fast path
+            plain = false;
+            break;
+          }
+          break;
+        }
+        if (sc == '\\') {
+          plain = false;
+          break;
+        }
+        ++scan;
+      }
+      if (plain && scan < n && sql[scan] == quote) {
+        t.kind = Tok::String;
+        t.text.assign(sql, j, scan - j);
+        i = scan + 1;
+        out->push_back(std::move(t));
+        continue;
+      }
       std::string payload;
       bool closed = false;
       while (j < n) {
@@ -181,10 +210,11 @@ bool tokenize(const std::string& sql, std::vector<Token>* out, std::string* err)
     } else {
       // punctuation; two character operators first
       if (i + 1 < n) {
-        const std::string two = sql.substr(i, 2);
-        if (two == "<=" || two == ">=" || two == "!=" || two == "<>") {
+        const char c1 = sql[i + 1];
+        if ((c == '<' && (c1 == '=' || c1 == '>')) || (c == '>' && c1 == '=') ||
+            (c == '!' && c1 == '=')) {
           t.kind = Tok::Punct;
-          t.text = two;
+          t.text.assign(sql, i, 2);
           i += 2;
           out->push_back(std::move(t));
           continue;

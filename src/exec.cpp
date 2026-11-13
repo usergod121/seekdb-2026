@@ -9,6 +9,7 @@
 #include <charconv>
 
 #include "db.h"
+#include "prof.h"
 #include "storage/scan_pool.h"
 #include "sql/lexer.h"
 #include "storage/vec_kernel.h"
@@ -721,25 +722,33 @@ Result Database::exec_insert(const Stmt& st, const bool replay) {
       return r;
     }
   }
+  ProfScope prof_loop(kProfInsertLoop);
+  // Reused across rows: a fresh Row, payload string and vector buffer per row is three allocations per
+  // row, which dominates a bulk load once the parser is out of the way.
+  const std::string undo_table = lower_ascii(t->name);
+  Row row;
+  row.vals.reserve(ncols);
+  std::string encoded;
+  std::vector<float> vec_payload;
   for (const std::vector<ExprPtr>& src : st.rows) {
     if (src.size() != order.size()) {
       r.err = Err::SyntaxError;
       r.message = "column count does not match value count";
       return r;
     }
-    Row row;
     row.vals.assign(ncols, Value());
+    row.vec.clear();
     for (size_t i = 0; i < order.size(); ++i) {
       const int c = order[i];
       Value v;
-      std::vector<float> payload;
-      const Err vrc = value_from_expr(*src[i], t->columns[static_cast<size_t>(c)], &payload, &v);
+      vec_payload.clear();
+      const Err vrc = value_from_expr(*src[i], t->columns[static_cast<size_t>(c)], &vec_payload, &v);
       if (vrc != Err::Ok) {
         r.err = vrc;
         r.message = "bad value for column " + t->columns[static_cast<size_t>(c)].name;
         return r;
       }
-      if (!payload.empty()) row.vec = std::move(payload);
+      if (!vec_payload.empty()) row.vec = std::move(vec_payload);
       row.vals[static_cast<size_t>(c)] = std::move(v);
     }
     const int64_t pk = row.vals[static_cast<size_t>(t->pk_col)].i;
@@ -749,26 +758,31 @@ Result Database::exec_insert(const Stmt& st, const bool replay) {
       r.message = "duplicate primary key " + std::to_string(pk);
       return r;
     }
-    std::string payload;
-    if (t->encode_row(row, &payload) != Err::Ok) {
+    encoded.clear();
+    ProfScope prof_encode(kProfEncodeRow);
+    if (t->encode_row(row, &encoded) != Err::Ok) {
       r.err = Err::ValueOverflow;
       r.message = "row does not fit";
       return r;
     }
     UndoRow u;
-    u.table = lower_ascii(t->name);
+    u.table = undo_table;
     u.pk = pk;
     u.existed = false;
     undo_rows_.push_back(std::move(u));
     Rid rid;
-    if (t->heap.insert(payload.data(), static_cast<int32_t>(payload.size()), &rid) != Err::Ok) {
+    const uint64_t prof_heap_start = Prof::on() ? Prof::now() : 0;
+    if (t->heap.insert(encoded.data(), static_cast<int32_t>(encoded.size()), &rid) != Err::Ok) {
       r.err = Err::TooManyRows;
       r.message = "cannot place the row";
       return r;
     }
+    if (Prof::on()) Prof::add(kProfHeapInsert, Prof::now() - prof_heap_start);
+    const uint64_t prof_index_start = Prof::on() ? Prof::now() : 0;
     t->pk_index[pk] = rid;
     ++t->live_rows;
     t->invalidate_cache();
+    if (Prof::on()) Prof::add(kProfPkIndex, Prof::now() - prof_index_start);
     ++r.affected;
   }
   return r;

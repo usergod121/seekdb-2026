@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include "db.h"
+#include "prof.h"
 #include "protocol/json.h"
 #include "protocol/writer.h"
 
@@ -85,10 +86,12 @@ int main(int argc, char** argv) {
 
       mv::JsonValue request;
       std::string parse_error;
+      const uint64_t prof_json_start = mv::Prof::on() ? mv::Prof::now() : 0;
       if (!mv::json_parse(line, &request, &parse_error)) {
         w.protocol_error("", "invalid_json", parse_error);
         continue;
       }
+      if (mv::Prof::on()) mv::Prof::add(mv::kProfJson, mv::Prof::now() - prof_json_start);
       // Echo the id exactly as it arrived, including its JSON type.
       const mv::JsonValue* id = mv::json_member(request, "id");
       const std::string id_json = (id != nullptr && !id->raw.empty()) ? id->raw : std::string("null");
@@ -100,6 +103,7 @@ int main(int argc, char** argv) {
         const mv::Err rc = db.close();
         w.result(mv::Result(), id_json);
         std::fflush(stdout);
+        mv::Prof::dump();
         return rc == mv::Err::Ok ? 0 : 1;
       }
       if (op_name != "execute") {
@@ -124,5 +128,6 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "signal received, shutting down cleanly\n");
   }
   db.close();
+  mv::Prof::dump();
   return 0;
 }

@@ -68,6 +68,16 @@ struct Parser {
     ++p;
     out->clear();
     while (p < end) {
+      // Copy the run that needs no decoding in one append. The scan stops on a quote, an escape or a
+      // control character, so the rules below are the same ones a per-byte copy would apply.
+      const char* run = p;
+      while (p < end) {
+        const unsigned char rc = static_cast<unsigned char>(*p);
+        if (rc == '"' || rc == '\\' || rc < 0x20) break;
+        ++p;
+      }
+      if (p > run) out->append(run, static_cast<size_t>(p - run));
+      if (p >= end) return fail("unterminated string");
       const unsigned char c = static_cast<unsigned char>(*p);
       if (c == '"') {
         ++p;
