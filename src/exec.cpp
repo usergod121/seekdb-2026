@@ -1280,9 +1280,24 @@ Result Database::exec_select(const Stmt& st) {
       if (shortlist > static_cast<int64_t>(rows)) shortlist = static_cast<int64_t>(rows);
       l2_topk_parallel_i8(t->cache_vecs_i8.data(), q_codes.data(), static_cast<int64_t>(rows), dims,
                           shortlist, t->cache_pks.data(), &shortlisted);
-      for (const VecHit& hit : shortlisted) {
-        const size_t idx = static_cast<size_t>(hit.idx);
-        const double d = l2_distance(t->cache_vecs.data() + static_cast<int64_t>(idx) * dims, q, dims);
+      // Rerank with the same kernel and the same float accumulation as the exact scan, so the order these
+      // rows come back in is bit-identical to the full scan's, ties included.
+      static thread_local std::vector<float> rerank_block;
+      rerank_block.resize(static_cast<size_t>(shortlisted.size()) * static_cast<size_t>(dims));
+      for (size_t i = 0; i < shortlisted.size(); ++i) {
+        const int64_t src = static_cast<int64_t>(shortlisted[i].idx);
+        std::memcpy(rerank_block.data() + i * static_cast<size_t>(dims),
+                    t->cache_vecs.data() + src * dims, static_cast<size_t>(dims) * sizeof(float));
+      }
+      static thread_local std::vector<float> rerank_dists;
+      rerank_dists.resize(shortlisted.size());
+      l2_batch_sq(rerank_block.data(), q, static_cast<int64_t>(shortlisted.size()), dims,
+                  rerank_dists.data());
+      double boundary = 0.0;   // largest exact distance inside the shortlist
+      for (size_t s = 0; s < shortlisted.size(); ++s) {
+        const size_t idx = static_cast<size_t>(shortlisted[s].idx);
+        const double d = static_cast<double>(rerank_dists[s]);
+        if (d > boundary) boundary = d;
         const int64_t pk = t->cache_pks[idx];
         if (heap.size() == k) {
           const HeapItem& worst = heap.front();
@@ -1297,20 +1312,30 @@ Result Database::exec_select(const Stmt& st) {
         heap.push_back(item);
         std::push_heap(heap.begin(), heap.end(), better);
       }
-      std::sort(heap.begin(), heap.end(), [](const HeapItem& a, const HeapItem& b) {
-        if (a.dist != b.dist) return a.dist < b.dist;
-        return a.pk < b.pk;
-      });
-      r.rows.reserve(heap.size());
-      for (const HeapItem& item : heap) {
-        std::vector<Cell> line;
-        if (!project(t->cache_rows[static_cast<size_t>(item.cache_idx)],
-                     t->cache_vec(static_cast<int64_t>(item.cache_idx)), &line)) {
-          return r;
+      // Trust guard. A row outside the shortlist can still belong to the true top-k when it ties with the
+      // k-th distance (the tie-break is the primary key) or when quantisation error hid it. If the k-th
+      // distance is not comfortably smaller than the shortlist boundary, answer from the full scan instead.
+      const bool shortlist_trusted =
+          static_cast<int64_t>(heap.size()) == static_cast<int64_t>(k) && heap.size() > 0 &&
+          static_cast<double>(heap.front().dist) * 1.02 < boundary;
+      if (!shortlist_trusted) {
+        heap.clear();
+      } else {
+        std::sort(heap.begin(), heap.end(), [](const HeapItem& a, const HeapItem& b) {
+          if (a.dist != b.dist) return a.dist < b.dist;
+          return a.pk < b.pk;
+        });
+        r.rows.reserve(heap.size());
+        for (const HeapItem& item : heap) {
+          std::vector<Cell> line;
+          if (!project(t->cache_rows[static_cast<size_t>(item.cache_idx)],
+                       t->cache_vec(static_cast<int64_t>(item.cache_idx)), &line)) {
+            return r;
+          }
+          r.rows.push_back(std::move(line));
         }
-        r.rows.push_back(std::move(line));
+        return r;
       }
-      return r;
     }
 
       // A lone equality filter selects exactly one value group built with the cache, so the scan can
