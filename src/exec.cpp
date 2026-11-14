@@ -1355,6 +1355,91 @@ Result Database::exec_select(const Stmt& st) {
         }
       }
       if (group != nullptr && !group->empty() && group->size() * 2 < rows && dims > 0) {
+        // Filtered coarse pass: gather the group's int8 codes into one contiguous block and shortlist with
+        // the integer kernel, then rerank exactly and apply the same trust guard as the unfiltered path.
+        const bool group_coarse = coarse_on && group->size() >= 256 && !t->cache_vecs_i8.empty();
+        if (group_coarse) {
+          static thread_local std::vector<int8_t> codes;
+          static thread_local std::vector<int32_t> coarse_sq;
+          static thread_local std::vector<int8_t> q_codes;
+          const size_t n = group->size();
+          codes.resize(n * static_cast<size_t>(dims));
+          coarse_sq.resize(n);
+          q_codes.resize(static_cast<size_t>(dims));
+          for (int64_t d = 0; d < dims; ++d) {
+            const float scaled = (q[d] - t->cache_i8_min) / t->cache_i8_scale;
+            int32_t code = static_cast<int32_t>(scaled + 0.5f);
+            if (code < 0) code = 0;
+            if (code > 254) code = 254;
+            q_codes[static_cast<size_t>(d)] = static_cast<int8_t>(code - 127);
+          }
+          for (size_t i = 0; i < n; ++i) {
+            const int64_t src = static_cast<int64_t>((*group)[i]);
+            std::memcpy(codes.data() + i * static_cast<size_t>(dims),
+                        t->cache_vecs_i8.data() + src * dims, static_cast<size_t>(dims));
+          }
+          l2_batch_i8(codes.data(), q_codes.data(), static_cast<int64_t>(n), dims, coarse_sq.data());
+          int64_t take = static_cast<int64_t>(k) * 4;
+          if (take < 32) take = 32;
+          if (take > static_cast<int64_t>(n)) take = static_cast<int64_t>(n);
+          std::vector<int64_t> order(n);
+          for (size_t i = 0; i < n; ++i) order[i] = static_cast<int64_t>(i);
+          std::partial_sort(order.begin(), order.begin() + take, order.end(),
+                            [&coarse_sq](const int64_t a, const int64_t b) {
+                              if (coarse_sq[static_cast<size_t>(a)] != coarse_sq[static_cast<size_t>(b)]) {
+                                return coarse_sq[static_cast<size_t>(a)] < coarse_sq[static_cast<size_t>(b)];
+                              }
+                              return a < b;
+                            });
+          static thread_local std::vector<float> block;
+          static thread_local std::vector<float> exact;
+          block.resize(static_cast<size_t>(take) * static_cast<size_t>(dims));
+          exact.resize(static_cast<size_t>(take));
+          for (int64_t ti = 0; ti < take; ++ti) {
+            const int64_t src = static_cast<int64_t>((*group)[static_cast<size_t>(order[static_cast<size_t>(ti)])]);
+            std::memcpy(block.data() + ti * dims, t->cache_vecs.data() + src * dims,
+                        static_cast<size_t>(dims) * sizeof(float));
+          }
+          l2_batch_sq(block.data(), q, take, dims, exact.data());
+          double boundary = 0.0;
+          for (int64_t ti = 0; ti < take; ++ti) {
+            const int64_t src = static_cast<int64_t>((*group)[static_cast<size_t>(order[static_cast<size_t>(ti)])]);
+            const double d = static_cast<double>(exact[static_cast<size_t>(ti)]);
+            if (d > boundary) boundary = d;
+            const int64_t pk = t->cache_pks[static_cast<size_t>(src)];
+            if (heap.size() == k) {
+              const HeapItem& worst = heap.front();
+              if (d > worst.dist || (d == worst.dist && pk >= worst.pk)) continue;
+              std::pop_heap(heap.begin(), heap.end(), better);
+              heap.pop_back();
+            }
+            HeapItem item;
+            item.dist = d;
+            item.pk = pk;
+            item.cache_idx = src;
+            heap.push_back(item);
+            std::push_heap(heap.begin(), heap.end(), better);
+          }
+          const bool trusted = static_cast<int64_t>(heap.size()) == static_cast<int64_t>(k) &&
+                               static_cast<double>(heap.front().dist) * 1.02 < boundary;
+          if (trusted) {
+            std::sort(heap.begin(), heap.end(), [](const HeapItem& a, const HeapItem& b) {
+              if (a.dist != b.dist) return a.dist < b.dist;
+              return a.pk < b.pk;
+            });
+            r.rows.reserve(heap.size());
+            for (const HeapItem& item : heap) {
+              std::vector<Cell> line;
+              if (!project(t->cache_rows[static_cast<size_t>(item.cache_idx)],
+                           t->cache_vec(static_cast<int64_t>(item.cache_idx)), &line)) {
+                return r;
+              }
+              r.rows.push_back(std::move(line));
+            }
+            return r;
+          }
+          heap.clear();
+        }
         std::vector<float> gathered(static_cast<size_t>(dims) * 4);
         std::vector<float> block(4);
         for (int64_t base = 0; base < static_cast<int64_t>(group->size()); base += 4) {
