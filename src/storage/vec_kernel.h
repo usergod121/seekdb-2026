@@ -25,6 +25,10 @@ void l2_batch(const float* base, const float* q, int64_t n, int64_t dims, float*
 // is monotone, so the k surviving rows can take it instead of every row.
 void l2_batch_sq(const float* base, const float* q, int64_t n, int64_t dims, float* out);
 
+// Squared distances from an int8 copy (one global scale): used to shortlist rows, which are then
+// reranked with exact float distances.
+void l2_batch_i8(const int8_t* base, const int8_t* q_codes, int64_t n, int64_t dims, int32_t* out);
+
 }  // namespace mv
 
 

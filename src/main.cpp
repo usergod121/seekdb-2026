@@ -13,6 +13,7 @@
 
 #include "db.h"
 #include "prof.h"
+#include "storage/vec_kernel.h"
 #include "protocol/json.h"
 #include "protocol/writer.h"
 
@@ -113,6 +114,58 @@ static int self_benchmark(mv::Database& db, const int queries, const int rows, c
   return 0;
 }
 
+// MVDB_KERNELBENCH=<repeats>: times the distance kernel alone over a 10000 x 128 table.
+static int kernel_benchmark(const int repeats, const int rows, const int dims) {
+  std::vector<float> base(static_cast<size_t>(rows) * dims);
+  std::uint64_t state = 99;
+  for (float& value : base) {
+    state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+    value = static_cast<float>(static_cast<double>((state >> 33) & 0xFFFFFF) / 8388608.0 - 1.0);
+  }
+  std::vector<float> query(static_cast<size_t>(dims), 0.25f);
+  std::vector<float> dists(static_cast<size_t>(rows));
+  // warm up
+  mv::l2_batch_sq(base.data(), query.data(), rows, dims, dists.data());
+  double best = 1e9;
+  for (int r = 0; r < repeats; ++r) {
+    const auto started = std::chrono::steady_clock::now();
+    mv::l2_batch_sq(base.data(), query.data(), rows, dims, dists.data());
+    const double us = std::chrono::duration<double, std::micro>(
+                          std::chrono::steady_clock::now() - started).count();
+    if (us < best) best = us;
+  }
+  volatile float sink = dists[0] + dists[rows - 1];
+  (void)sink;
+  std::fprintf(stderr, "[kernelbench] float %d x %d: best %.2f us  %.1f Gfloat/s\n", rows, dims, best,
+               static_cast<double>(rows) * dims / best / 1000.0);
+
+  // Same data, quantised to one byte per component, and the same measurement.
+  std::vector<int8_t> codes(static_cast<size_t>(rows) * dims);
+  for (size_t i = 0; i < base.size(); ++i) {
+    const float scaled = base[i] * 127.0f;
+    int32_t v = static_cast<int32_t>(scaled + (scaled >= 0 ? 0.5f : -0.5f));
+    if (v < -127) v = -127;
+    if (v > 127) v = 127;
+    codes[i] = static_cast<int8_t>(v);
+  }
+  std::vector<int8_t> q_codes(static_cast<size_t>(dims), 32);
+  std::vector<int32_t> squares(static_cast<size_t>(rows));
+  mv::l2_batch_i8(codes.data(), q_codes.data(), rows, dims, squares.data());
+  double best8 = 1e9;
+  for (int r = 0; r < repeats; ++r) {
+    const auto started = std::chrono::steady_clock::now();
+    mv::l2_batch_i8(codes.data(), q_codes.data(), rows, dims, squares.data());
+    const double us = std::chrono::duration<double, std::micro>(
+                          std::chrono::steady_clock::now() - started).count();
+    if (us < best8) best8 = us;
+  }
+  volatile int32_t sink8 = squares[0] + squares[rows - 1];
+  (void)sink8;
+  std::fprintf(stderr, "[kernelbench] int8  %d x %d: best %.2f us  %.1f Gelement/s\n", rows, dims, best8,
+               static_cast<double>(rows) * dims / best8 / 1000.0);
+  return 0;
+}
+
 int main(int argc, char** argv) {
   std::string data_dir = "/data";
   if (!parse_args(argc, argv, &data_dir)) return 2;
@@ -134,11 +187,38 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "failed to open data directory: %s\n", data_dir.c_str());
     return 1;
   }
+  if (const char* kb = ::getenv("MVDB_KERNELBENCH")) {
+    const int count = std::atoi(kb);
+    if (count > 0) {
+      int rows = 10000;
+      int dims = 128;
+      if (const char* v = ::getenv("MVDB_SELFBENCH_ROWS")) {
+        const int parsed = std::atoi(v);
+        if (parsed > 0) rows = parsed;
+      }
+      if (const char* v = ::getenv("MVDB_SELFBENCH_DIMS")) {
+        const int parsed = std::atoi(v);
+        if (parsed > 0) dims = parsed;
+      }
+      return kernel_benchmark(count, rows, dims);
+    }
+  }
   if (const char* bench = ::getenv("MVDB_SELFBENCH")) {
     const int count = std::atoi(bench);
     if (count > 0) {
-      const int rc = self_benchmark(db, count, 10000, 128);
+      int rows = 10000;
+      int dims = 128;
+      if (const char* v = ::getenv("MVDB_SELFBENCH_ROWS")) {
+        const int parsed = std::atoi(v);
+        if (parsed > 0) rows = parsed;
+      }
+      if (const char* v = ::getenv("MVDB_SELFBENCH_DIMS")) {
+        const int parsed = std::atoi(v);
+        if (parsed > 0) dims = parsed;
+      }
+      const int rc = self_benchmark(db, count, rows, dims);
       db.close();
+      mv::Prof::dump();
       return rc;
     }
   }

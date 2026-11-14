@@ -7,11 +7,18 @@
 
 #include <algorithm>
 #include <cmath>
+#include <chrono>
+#include <limits>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+
+#if defined(__x86_64__) || defined(_M_X64)
+#include <immintrin.h>
+#define MV_X86 1
+#endif
 
 #include "storage/vec_kernel.h"
 
@@ -67,6 +74,46 @@ float* block_scratch(const size_t need) {
   return buffer.data();
 }
 
+// Collects the positions whose value is at or below the limit. This is the filter that keeps rows out of
+// the TopK heap: at k=10 over 10000 rows fewer than a tenth of a percent survive, so touching the heap per
+// row was more expensive than computing the distances.
+int64_t filter_le_scalar(const float* values, const int64_t count, const float limit, int32_t* out) {
+  int64_t n = 0;
+  for (int64_t i = 0; i < count; ++i) {
+    if (values[i] <= limit) out[n++] = static_cast<int32_t>(i);
+  }
+  return n;
+}
+
+#if defined(MV_X86)
+__attribute__((target("avx2"))) int64_t filter_le_avx2(const float* values, const int64_t count,
+                                                       const float limit, int32_t* out) {
+  int64_t n = 0;
+  int64_t i = 0;
+  const __m256 bound = _mm256_set1_ps(limit);
+  for (; i + 8 <= count; i += 8) {
+    const __m256 block = _mm256_loadu_ps(values + i);
+    int mask = _mm256_movemask_ps(_mm256_cmp_ps(block, bound, _CMP_LE_OQ));
+    while (mask != 0) {
+      const int lane = __builtin_ctz(static_cast<unsigned>(mask));
+      mask &= mask - 1;
+      out[n++] = static_cast<int32_t>(i + lane);
+    }
+  }
+  for (; i < count; ++i) {
+    if (values[i] <= limit) out[n++] = static_cast<int32_t>(i);
+  }
+  return n;
+}
+#endif
+
+int64_t filter_le(const float* values, const int64_t count, const float limit, int32_t* out) {
+#if defined(MV_X86)
+  if (__builtin_cpu_supports("avx2")) return filter_le_avx2(values, count, limit, out);
+#endif
+  return filter_le_scalar(values, count, limit, out);
+}
+
 // Bounded TopK of one worker: unsorted storage plus the position of the element that ranks last.
 struct TopK {
   int64_t k = 0;
@@ -105,10 +152,46 @@ void scan_range(const float* base, const float* q, const int64_t dims, const int
   TopK top(k);
   top.items.reserve(static_cast<size_t>(std::min(k, end - begin)));
   float* const dists = block_scratch(static_cast<size_t>(kBlockRows * dims));
+  static thread_local std::vector<int32_t> survivors;
+  survivors.resize(static_cast<size_t>(kBlockRows));
+  // Running k-th distance. A row at or above it cannot enter the TopK unless it ties, so the filter keeps
+  // ties in and drops the rest with one compare instead of a heap visit.
+  float threshold = std::numeric_limits<float>::infinity();
+  static const bool qtime = ::getenv("MVDB_QTIME") != nullptr;
+  double kernel_us = 0.0;
+  double filter_us = 0.0;
+  int64_t visits = 0;
+  const auto qtime_start = std::chrono::steady_clock::now();
   for (int64_t start = begin; start < end; start += kBlockRows) {
     const int64_t count = std::min(kBlockRows, end - start);
+    const auto kernel_start = std::chrono::steady_clock::now();
     l2_batch_sq(base + start * dims, q, count, dims, dists);
-    for (int64_t i = 0; i < count; ++i) {
+    if (qtime) {
+      kernel_us += std::chrono::duration<double, std::micro>(
+                       std::chrono::steady_clock::now() - kernel_start).count();
+    }
+    if (!top.full()) {
+      for (int64_t i = 0; i < count; ++i) {
+        const int64_t row = start + i;
+        if (keep != nullptr && !keep(keep_ctx, row)) continue;
+        VecHit hit;
+        hit.dist = dists[i];
+        hit.pk = pks[row];
+        hit.idx = row;
+        top.offer(hit);
+      }
+      if (top.full()) threshold = static_cast<float>(top.items[top.worst_at].dist);
+      continue;
+    }
+    const auto filter_start = std::chrono::steady_clock::now();
+    const int64_t kept = filter_le(dists, count, threshold, survivors.data());
+    if (qtime) {
+      filter_us += std::chrono::duration<double, std::micro>(
+                       std::chrono::steady_clock::now() - filter_start).count();
+      visits += kept;
+    }
+    for (int64_t s = 0; s < kept; ++s) {
+      const int64_t i = survivors[static_cast<size_t>(s)];
       const int64_t row = start + i;
       if (keep != nullptr && !keep(keep_ctx, row)) continue;
       VecHit hit;
@@ -117,6 +200,14 @@ void scan_range(const float* base, const float* q, const int64_t dims, const int
       hit.idx = row;
       top.offer(hit);
     }
+    threshold = static_cast<float>(top.items[top.worst_at].dist);
+  }
+  if (qtime) {
+    const double total = std::chrono::duration<double, std::micro>(
+                             std::chrono::steady_clock::now() - qtime_start).count();
+    std::fprintf(stderr, "[scan] rows=%lld kernel=%.1fus filter=%.1fus visits=%lld total=%.1fus\n",
+                 static_cast<long long>(end - begin), kernel_us, filter_us,
+                 static_cast<long long>(visits), total);
   }
   out->swap(top.items);
   std::sort(out->begin(), out->end(), ranks_before);
@@ -224,6 +315,57 @@ std::vector<std::vector<VecHit>>& partial_scratch(const int workers) {
 }
 
 }  // namespace
+
+void l2_topk_parallel_i8(const int8_t* base, const int8_t* q_codes, int64_t n, int64_t dims,
+                         int64_t k, const int64_t* pks, std::vector<VecHit>* out) {
+  out->clear();
+  if (n <= 0 || dims <= 0 || k <= 0 || base == nullptr || q_codes == nullptr) return;
+  const int workers = Pool::instance().size();
+  std::vector<std::vector<VecHit>>& partial = partial_scratch(workers);
+  const int64_t chunk = (n + workers - 1) / workers;
+  auto scan_chunk = [&](const int worker) {
+    const int64_t begin = static_cast<int64_t>(worker) * chunk;
+    const int64_t end = std::min(n, begin + chunk);
+    std::vector<VecHit>& mine = partial[static_cast<size_t>(worker)];
+    mine.clear();
+    if (begin >= end) return;
+    std::vector<std::pair<int32_t, int64_t>> heap;
+    heap.reserve(static_cast<size_t>(k) + 1);
+    std::vector<int32_t> scratch(static_cast<size_t>(kBlockRows));
+    for (int64_t start = begin; start < end; start += kBlockRows) {
+      const int64_t count = std::min<int64_t>(kBlockRows, end - start);
+      l2_batch_i8(base + start * dims, q_codes, count, dims, scratch.data());
+      for (int64_t i = 0; i < count; ++i) {
+        const int32_t d = scratch[static_cast<size_t>(i)];
+        if (static_cast<int64_t>(heap.size()) == k) {
+          if (d > heap.front().first) continue;
+          if (d == heap.front().first && start + i >= heap.front().second) continue;
+          std::pop_heap(heap.begin(), heap.end());
+          heap.pop_back();
+        }
+        heap.emplace_back(d, start + i);
+        std::push_heap(heap.begin(), heap.end());
+      }
+    }
+    std::sort(heap.begin(), heap.end());
+    mine.reserve(heap.size());
+    for (const auto& entry : heap) {
+      VecHit hit;
+      hit.dist = static_cast<double>(entry.first);
+      hit.pk = (pks != nullptr) ? pks[entry.second] : 0;
+      hit.idx = entry.second;
+      mine.push_back(hit);
+    }
+  };
+  std::function<void(int)> body = [&](const int worker) { scan_chunk(worker); };
+  Pool::instance().run(&body);
+  size_t total = 0;
+  for (const auto& part : partial) total += part.size();
+  out->reserve(total);
+  for (const auto& part : partial) out->insert(out->end(), part.begin(), part.end());
+  std::sort(out->begin(), out->end(), ranks_before);
+  if (static_cast<int64_t>(out->size()) > k) out->resize(static_cast<size_t>(k));
+}
 
 int scan_worker_count() { return Pool::instance().size(); }
 

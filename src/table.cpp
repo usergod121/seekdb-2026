@@ -1,4 +1,5 @@
 #include "table.h"
+#include "storage/vec_kernel.h"
 
 #include <cstdlib>
 
@@ -310,6 +311,30 @@ Err Table::build_cache() {
     if (magnitude > 1e17f) {
       cache_needs_double = true;
       break;
+    }
+  }
+  // int8 copy for the coarse pass: one global scale, built once with the cache.
+  cache_vecs_i8.clear();
+  cache_i8_scale = 0.0f;
+  cache_i8_min = 0.0f;
+  if (cache_vecs.size() >= 2048 * static_cast<size_t>(dims > 0 ? dims : 1) && dims > 0) {
+    float lo = cache_vecs[0];
+    float hi = cache_vecs[0];
+    for (const float value : cache_vecs) {
+      if (value < lo) lo = value;
+      if (value > hi) hi = value;
+    }
+    if (hi > lo) {
+      cache_i8_scale = (hi - lo) / 254.0f;
+      cache_i8_min = lo;
+      cache_vecs_i8.resize(cache_vecs.size());
+      for (size_t i = 0; i < cache_vecs.size(); ++i) {
+        const float scaled = (cache_vecs[i] - lo) / cache_i8_scale;
+        int32_t code = static_cast<int32_t>(scaled + 0.5f);
+        if (code < 0) code = 0;
+        if (code > 254) code = 254;
+        cache_vecs_i8[i] = static_cast<int8_t>(code - 127);
+      }
     }
   }
   cache_valid = true;

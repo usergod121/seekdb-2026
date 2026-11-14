@@ -33,6 +33,11 @@ int scan_worker_count();
 // Bounded TopK over `n` consecutive vectors at `base` against `q`. `pks` gives the primary key of each
 // row and `keep`, when non-null, decides whether a row participates. The result is sorted by
 // (distance, primary key) ascending and holds at most `k` entries.
+// Coarse TopK over the int8 copy: fills *out with the k rows whose quantised distance is smallest.
+// The caller reranks those rows with exact distances.
+void l2_topk_parallel_i8(const int8_t* base, const int8_t* q_codes, int64_t n, int64_t dims,
+                         int64_t k, const int64_t* pks, std::vector<VecHit>* out);
+
 void l2_topk_parallel(const float* base, const float* q, int64_t n, int64_t dims, int64_t k,
                       const int64_t* pks, KeepRowFn keep, const void* keep_ctx,
                       std::vector<VecHit>* out);

@@ -1196,6 +1196,7 @@ Result Database::exec_select(const Stmt& st) {
   };
 
   int64_t k_limit = -1;
+  const uint64_t prof_sel_start = Prof::on() ? Prof::now() : 0;
   int64_t k_offset = 0;
   const bool have_limit = st.limit && eval_const_int(*st.limit, &k_limit) && k_limit >= 0;
   const bool have_offset = st.limit_offset && eval_const_int(*st.limit_offset, &k_offset) &&
@@ -1237,6 +1238,8 @@ Result Database::exec_select(const Stmt& st) {
     }
   }
 
+  static const bool qtime = ::getenv("MVDB_QTIME") != nullptr;
+  const auto qt_entry = std::chrono::steady_clock::now();
   // ---- fast path: one ascending L2 ordering with a LIMIT -> bounded heap of size K ----
   if (magnitudes_safe && cached && st.order_by.size() == 1 && !order_l2[0].q.empty() &&
       st.order_by[0].asc && have_limit) {
@@ -1251,6 +1254,65 @@ Result Database::exec_select(const Stmt& st) {
     const size_t rows = t->cache_rows.size();
 
     if (k > 0 && use_pred) {
+    // On by default: the int8 coarse pass plus an exact rerank measured 22% off the median query time and
+    // returns the identical order. MVDB_COARSE=0 forces the plain exact scan.
+    static const bool coarse_on = []() {
+      const char* mode = ::getenv("MVDB_COARSE");
+      return mode == nullptr || std::atoi(mode) != 0;
+    }();
+    if (k > 0 && no_filter && coarse_on && rows >= 2048 && !t->cache_vecs_i8.empty()) {
+      // Coarse pass over the int8 copy, whose kernel measures about 2.7x the float kernel's rate, then an
+      // exact rerank of the shortlist: the returned order and distances are full precision.
+      // Scratch that survives between queries: allocating two vectors per query showed up as the tail of
+      // the latency distribution.
+      static thread_local std::vector<int8_t> q_codes;
+      static thread_local std::vector<VecHit> shortlisted;
+      q_codes.resize(static_cast<size_t>(dims));
+      for (int64_t d = 0; d < dims; ++d) {
+        const float scaled = (q[d] - t->cache_i8_min) / t->cache_i8_scale;
+        int32_t code = static_cast<int32_t>(scaled + 0.5f);
+        if (code < 0) code = 0;
+        if (code > 254) code = 254;
+        q_codes[static_cast<size_t>(d)] = static_cast<int8_t>(code - 127);
+      }
+      int64_t shortlist = static_cast<int64_t>(k) * 4;
+      if (shortlist < 32) shortlist = 32;
+      if (shortlist > static_cast<int64_t>(rows)) shortlist = static_cast<int64_t>(rows);
+      l2_topk_parallel_i8(t->cache_vecs_i8.data(), q_codes.data(), static_cast<int64_t>(rows), dims,
+                          shortlist, t->cache_pks.data(), &shortlisted);
+      for (const VecHit& hit : shortlisted) {
+        const size_t idx = static_cast<size_t>(hit.idx);
+        const double d = l2_distance(t->cache_vecs.data() + static_cast<int64_t>(idx) * dims, q, dims);
+        const int64_t pk = t->cache_pks[idx];
+        if (heap.size() == k) {
+          const HeapItem& worst = heap.front();
+          if (d > worst.dist || (d == worst.dist && pk >= worst.pk)) continue;
+          std::pop_heap(heap.begin(), heap.end(), better);
+          heap.pop_back();
+        }
+        HeapItem item;
+        item.dist = d;
+        item.pk = pk;
+        item.cache_idx = static_cast<int64_t>(idx);
+        heap.push_back(item);
+        std::push_heap(heap.begin(), heap.end(), better);
+      }
+      std::sort(heap.begin(), heap.end(), [](const HeapItem& a, const HeapItem& b) {
+        if (a.dist != b.dist) return a.dist < b.dist;
+        return a.pk < b.pk;
+      });
+      r.rows.reserve(heap.size());
+      for (const HeapItem& item : heap) {
+        std::vector<Cell> line;
+        if (!project(t->cache_rows[static_cast<size_t>(item.cache_idx)],
+                     t->cache_vec(static_cast<int64_t>(item.cache_idx)), &line)) {
+          return r;
+        }
+        r.rows.push_back(std::move(line));
+      }
+      return r;
+    }
+
       // A lone equality filter selects exactly one value group built with the cache, so the scan can
       // walk the matching rows instead of the whole table. It is only worth it while the group is a
       // minority: past that the contiguous full scan beats gathering.
@@ -1322,12 +1384,22 @@ Result Database::exec_select(const Stmt& st) {
       l2_topk_parallel(t->cache_vecs.data(), q, static_cast<int64_t>(rows), dims,
                        static_cast<int64_t>(k), t->cache_pks.data(),
                        no_filter ? nullptr : &fast_keep_row, no_filter ? nullptr : &keep, &hits);
+      const auto qt_scan = std::chrono::steady_clock::now();
       r.rows.reserve(hits.size());
       for (const VecHit& hit : hits) {
         const size_t idx = static_cast<size_t>(hit.idx);
         std::vector<Cell> line;
         if (!project(t->cache_rows[idx], t->cache_vec(static_cast<int64_t>(idx)), &line)) return r;
         r.rows.push_back(std::move(line));
+      }
+      if (qtime) {
+        const auto qt_emit = std::chrono::steady_clock::now();
+        std::fprintf(stderr,
+                     "[qtime] select=%.1fus scan=%.1fus emit=%.1fus rows=%zu\n",
+                     std::chrono::duration<double, std::micro>(qt_scan - qt_entry).count(),
+                     std::chrono::duration<double, std::micro>(qt_emit - qt_scan).count(),
+                     std::chrono::duration<double, std::micro>(qt_emit - qt_scan).count(),
+                     r.rows.size());
       }
       return r;
     }

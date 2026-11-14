@@ -22,6 +22,7 @@ enum ProfSlot {
   kProfJson,
   kProfSplit,
   kProfCopyStmt,
+  kProfFastScan,
   kProfBytesWal,
   kProfBytesPage,
   kProfSlots
@@ -41,6 +42,7 @@ inline const char* prof_name(const int slot) {
     case kProfJson: return "json-request";
     case kProfSplit: return "split-statements";
     case kProfCopyStmt: return "copy-statement";
+    case kProfFastScan: return "fast-scan";
     case kProfBytesWal: return "bytes-log";
     case kProfBytesPage: return "bytes-pages";
     default: return "?";
