@@ -1312,6 +1312,7 @@ Result Database::exec_select(const Stmt& st) {
         heap.push_back(item);
         std::push_heap(heap.begin(), heap.end(), better);
       }
+      const auto coarse_done = std::chrono::steady_clock::now();
       // Trust guard. A row outside the shortlist can still belong to the true top-k when it ties with the
       // k-th distance (the tie-break is the primary key) or when quantisation error hid it. If the k-th
       // distance is not comfortably smaller than the shortlist boundary, answer from the full scan instead.
@@ -1325,6 +1326,7 @@ Result Database::exec_select(const Stmt& st) {
           if (a.dist != b.dist) return a.dist < b.dist;
           return a.pk < b.pk;
         });
+        const auto guard_done = std::chrono::steady_clock::now();
         r.rows.reserve(heap.size());
         for (const HeapItem& item : heap) {
           std::vector<Cell> line;
@@ -1333,6 +1335,16 @@ Result Database::exec_select(const Stmt& st) {
             return r;
           }
           r.rows.push_back(std::move(line));
+        }
+        if (qtime) {
+          const auto emit_done = std::chrono::steady_clock::now();
+          std::fprintf(stderr,
+                       "[coarse] prescan=%.1fus coarse=%.1fus guard_rerank=%.1fus emit=%.1fus n=%zu\n",
+                       std::chrono::duration<double, std::micro>(coarse_done - qt_entry).count(),
+                       std::chrono::duration<double, std::micro>(guard_done - coarse_done).count(),
+                       std::chrono::duration<double, std::micro>(guard_done - coarse_done).count(),
+                       std::chrono::duration<double, std::micro>(emit_done - guard_done).count(),
+                       r.rows.size());
         }
         return r;
       }

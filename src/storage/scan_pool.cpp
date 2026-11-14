@@ -332,13 +332,16 @@ void l2_topk_parallel_i8(const int8_t* base, const int8_t* q_codes, int64_t n, i
     std::vector<std::pair<int32_t, int64_t>> heap;
     heap.reserve(static_cast<size_t>(k) + 1);
     std::vector<int32_t> scratch(static_cast<size_t>(kBlockRows));
+    // Same threshold filter as the float scan: once the heap is full, only rows at or below the current
+    // k-th value are visited, which is a single integer compare per row instead of a heap update.
+    int64_t limit = std::numeric_limits<int64_t>::max();
     for (int64_t start = begin; start < end; start += kBlockRows) {
       const int64_t count = std::min<int64_t>(kBlockRows, end - start);
       l2_batch_i8(base + start * dims, q_codes, count, dims, scratch.data());
       for (int64_t i = 0; i < count; ++i) {
         const int32_t d = scratch[static_cast<size_t>(i)];
+        if (d > limit) continue;
         if (static_cast<int64_t>(heap.size()) == k) {
-          if (d > heap.front().first) continue;
           if (d == heap.front().first && start + i >= heap.front().second) continue;
           std::pop_heap(heap.begin(), heap.end());
           heap.pop_back();
@@ -346,6 +349,7 @@ void l2_topk_parallel_i8(const int8_t* base, const int8_t* q_codes, int64_t n, i
         heap.emplace_back(d, start + i);
         std::push_heap(heap.begin(), heap.end());
       }
+      if (static_cast<int64_t>(heap.size()) == k) limit = heap.front().first;
     }
     std::sort(heap.begin(), heap.end());
     mine.reserve(heap.size());
