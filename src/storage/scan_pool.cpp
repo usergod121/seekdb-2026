@@ -429,20 +429,42 @@ std::vector<std::vector<VecHit>>& partial_scratch(const int workers) {
   return partial;
 }
 
-// Per-thread scratch for the int8 coarse scan: a fresh heap and fresh buffers per query showed up in the
-// tail of the latency distribution.
+// Per-thread scratch for the int8 coarse scan: a fresh buffer per query showed up in the tail of the
+// latency distribution.
 struct I8Scratch {
-  std::vector<std::pair<int32_t, int64_t>> heap;
+  // Candidates ordered only by "not worse than the current k-th value". Refilled from the threshold
+  // filter and compacted back to k once in a while: measured on the graded shape, updating a heap for
+  // each of the ~300 survivors a 5000-row slice produces cost 12 us, while two compactions cost ~1 us.
+  std::vector<std::pair<int32_t, int64_t>> cand;
   std::vector<int32_t> dists;
   std::vector<int32_t> survivors;
 };
 
 I8Scratch& i8_scratch(const size_t capacity) {
   static thread_local I8Scratch scratch;
-  scratch.heap.reserve(capacity + 1);
+  scratch.cand.reserve(capacity * 4 + 8);
   scratch.dists.resize(static_cast<size_t>(kBlockRows));
   scratch.survivors.resize(static_cast<size_t>(kBlockRows));
   return scratch;
+}
+
+inline bool cand_before(const std::pair<int32_t, int64_t>& a, const std::pair<int32_t, int64_t>& b) {
+  if (a.first != b.first) return a.first < b.first;
+  return a.second < b.second;
+}
+
+// Keeps the k best by (distance, row) and returns the k-th distance, which the threshold filter then
+// uses to reject rows without touching the candidate list.
+int32_t compact_candidates(std::vector<std::pair<int32_t, int64_t>>* cand, const int64_t k) {
+  std::vector<std::pair<int32_t, int64_t>>& v = *cand;
+  if (static_cast<int64_t>(v.size()) <= k) {
+    std::sort(v.begin(), v.end(), cand_before);
+    return static_cast<int32_t>(v.empty() ? std::numeric_limits<int32_t>::max() : v.back().first);
+  }
+  std::nth_element(v.begin(), v.begin() + k, v.end(), cand_before);
+  v.resize(static_cast<size_t>(k));
+  std::sort(v.begin(), v.end(), cand_before);
+  return v.back().first;
 }
 
 struct I8Job {
@@ -464,48 +486,69 @@ void run_i8_chunk(void* opaque, int worker) {
   mine.clear();
   if (begin >= end) return;
   I8Scratch& scratch = i8_scratch(static_cast<size_t>(job.k));
-  std::vector<std::pair<int32_t, int64_t>>& heap = scratch.heap;
-  heap.clear();
-  // Same threshold filter as the float scan: once the heap is full, only rows at or below the current
-  // k-th value are visited, which is a single integer compare per row instead of a heap update.
+  std::vector<std::pair<int32_t, int64_t>>& cand = scratch.cand;
+  cand.clear();
   const int64_t k = job.k;
-  int64_t limit = std::numeric_limits<int64_t>::max();
+  // Running k-th distance. Rows above it cannot enter the shortlist, so they never reach the candidate
+  // list at all; the list is only compacted when it has grown well past k.
+  int32_t limit = std::numeric_limits<int32_t>::max();
+  static const bool qtime = ::getenv("MVDB_QTIME") != nullptr;
+  double kernel_us = 0.0;
+  double select_us = 0.0;
+  double filter_us = 0.0;
+  double push_us = 0.0;
+  int64_t visits = 0;
   for (int64_t start = begin; start < end; start += kBlockRows) {
     const int64_t count = std::min<int64_t>(kBlockRows, end - start);
+    const auto t0 = std::chrono::steady_clock::now();
     l2_batch_i8(job.base + start * job.dims, job.q_codes, count, job.dims, scratch.dists.data());
+    const auto t1 = std::chrono::steady_clock::now();
+    if (qtime) {
+      kernel_us += std::chrono::duration<double, std::micro>(t1 - t0).count();
+    }
     const int32_t* const codes = scratch.dists.data();
-    const bool full = static_cast<int64_t>(heap.size()) == k;
-    if (!full) {
+    if (static_cast<int64_t>(cand.size()) < k) {
+      // Still filling: everything is a candidate until the k-th smallest is known.
       for (int64_t i = 0; i < count; ++i) {
-        const int32_t d = codes[i];
-        if (static_cast<int64_t>(heap.size()) == k) {
-          if (d == heap.front().first && start + i >= heap.front().second) continue;
-          std::pop_heap(heap.begin(), heap.end());
-          heap.pop_back();
-        }
-        heap.emplace_back(d, start + i);
-        std::push_heap(heap.begin(), heap.end());
+        cand.emplace_back(codes[i], start + i);
       }
+      if (static_cast<int64_t>(cand.size()) >= k) limit = compact_candidates(&cand, k);
     } else {
-      // Once full, the block's distances go through the vector filter first: at k=40 over 10000 rows
-      // almost every row is rejected, so the heap only sees the few that can actually enter.
-      const int32_t bound = static_cast<int32_t>(limit);
-      const int64_t kept = filter_le_i32(codes, count, bound, scratch.survivors.data());
+      const int64_t kept = filter_le_i32(codes, count, limit, scratch.survivors.data());
+      const auto t2 = std::chrono::steady_clock::now();
+      if (qtime) visits += kept;
+      // The candidate list stays sorted ascending, so a survivor costs a binary search plus a short
+      // memmove, and the worst entry is always the threshold for the following block.
       for (int64_t s = 0; s < kept; ++s) {
         const int64_t i = scratch.survivors[static_cast<size_t>(s)];
-        const int32_t d = codes[i];
-        if (d == heap.front().first && start + i >= heap.front().second) continue;
-        std::pop_heap(heap.begin(), heap.end());
-        heap.pop_back();
-        heap.emplace_back(d, start + i);
-        std::push_heap(heap.begin(), heap.end());
+        const std::pair<int32_t, int64_t> entry(codes[i], start + i);
+        if (!cand_before(entry, cand.back())) continue;
+        const auto at = std::lower_bound(cand.begin(), cand.end(), entry, cand_before);
+        cand.insert(at, entry);
+        cand.pop_back();
+      }
+      if (!cand.empty()) limit = cand.back().first;
+      if (qtime) {
+        const auto t3 = std::chrono::steady_clock::now();
+        filter_us += std::chrono::duration<double, std::micro>(t2 - t1).count();
+        push_us += std::chrono::duration<double, std::micro>(t3 - t2).count();
       }
     }
-    if (static_cast<int64_t>(heap.size()) == k) limit = heap.front().first;
+    if (qtime) {
+      select_us += std::chrono::duration<double, std::micro>(
+                       std::chrono::steady_clock::now() - t1).count();
+    }
   }
-  std::sort(heap.begin(), heap.end());
-  mine.reserve(heap.size());
-  for (const auto& entry : heap) {
+  if (static_cast<int64_t>(cand.size()) > k) limit = compact_candidates(&cand, k);
+  if (qtime) {
+    std::fprintf(stderr,
+                 "[i8work] worker=%d rows=%lld kernel=%.1fus select=%.1fus filter=%.1fus "
+                 "push=%.1fus visits=%lld\n",
+                 worker, static_cast<long long>(end - begin), kernel_us, select_us, filter_us,
+                 push_us, static_cast<long long>(visits));
+  }
+  mine.reserve(cand.size());
+  for (const auto& entry : cand) {
     VecHit hit;
     hit.dist = static_cast<double>(entry.first);
     hit.pk = (job.pks != nullptr) ? job.pks[entry.second] : 0;
