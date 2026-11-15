@@ -316,6 +316,7 @@ Err Table::build_cache() {
   // int8 copy for the coarse pass: one global scale, built once with the cache.
   cache_vecs_i8.clear();
   cache_i8_scale = 0.0f;
+  cache_i8_inv_scale = 0.0f;
   cache_i8_min = 0.0f;
   if (cache_vecs.size() >= 2048 * static_cast<size_t>(dims > 0 ? dims : 1) && dims > 0) {
     float lo = cache_vecs[0];
@@ -326,9 +327,12 @@ Err Table::build_cache() {
     }
     if (hi > lo) {
       cache_i8_scale = (hi - lo) / 254.0f;
+      cache_i8_inv_scale = (cache_i8_scale > 0.0f) ? (1.0f / cache_i8_scale) : 0.0f;
       cache_i8_min = lo;
       cache_vecs_i8.resize(cache_vecs.size());
       for (size_t i = 0; i < cache_vecs.size(); ++i) {
+        // Division here, on purpose: the stored codes stay bit-identical to what earlier builds wrote, so
+        // this change cannot move an answer. The reciprocal is only used on the per-query encoding path.
         const float scaled = (cache_vecs[i] - lo) / cache_i8_scale;
         int32_t code = static_cast<int32_t>(scaled + 0.5f);
         if (code < 0) code = 0;

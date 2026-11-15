@@ -49,6 +49,7 @@ struct Table {
   // which are then reranked with exact distances.
   std::vector<int8_t> cache_vecs_i8;
   float cache_i8_scale = 0.0f;
+  float cache_i8_inv_scale = 0.0f;   // 1/scale, so encoding a query needs no division per dimension
   float cache_i8_min = 0.0f;
   // True when a component is large enough that a float32 accumulator could overflow
   // (the batched kernels then hand those rows to the double path).
@@ -76,6 +77,7 @@ struct Table {
     cache_vecs.clear();
     cache_vecs_i8.clear();
     cache_i8_scale = 0.0f;
+    cache_i8_inv_scale = 0.0f;
     cache_i8_min = 0.0f;
     cache_int_cols.clear();
     cache_str_data.clear();

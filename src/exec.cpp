@@ -1269,17 +1269,19 @@ Result Database::exec_select(const Stmt& st) {
       static thread_local std::vector<VecHit> shortlisted;
       q_codes.resize(static_cast<size_t>(dims));
       for (int64_t d = 0; d < dims; ++d) {
-        const float scaled = (q[d] - t->cache_i8_min) / t->cache_i8_scale;
+        const float scaled = (q[d] - t->cache_i8_min) * t->cache_i8_inv_scale;
         int32_t code = static_cast<int32_t>(scaled + 0.5f);
         if (code < 0) code = 0;
         if (code > 254) code = 254;
         q_codes[static_cast<size_t>(d)] = static_cast<int8_t>(code - 127);
       }
+      const auto stage_codes = std::chrono::steady_clock::now();
       int64_t shortlist = static_cast<int64_t>(k) * 4;
       if (shortlist < 32) shortlist = 32;
       if (shortlist > static_cast<int64_t>(rows)) shortlist = static_cast<int64_t>(rows);
       l2_topk_parallel_i8(t->cache_vecs_i8.data(), q_codes.data(), static_cast<int64_t>(rows), dims,
                           shortlist, t->cache_pks.data(), &shortlisted);
+      const auto stage_scan = std::chrono::steady_clock::now();
       // Rerank with the same kernel and the same float accumulation as the exact scan, so the order these
       // rows come back in is bit-identical to the full scan's, ties included.
       static thread_local std::vector<float> rerank_block;
@@ -1289,10 +1291,12 @@ Result Database::exec_select(const Stmt& st) {
         std::memcpy(rerank_block.data() + i * static_cast<size_t>(dims),
                     t->cache_vecs.data() + src * dims, static_cast<size_t>(dims) * sizeof(float));
       }
+      const auto stage_gather = std::chrono::steady_clock::now();
       static thread_local std::vector<float> rerank_dists;
       rerank_dists.resize(shortlisted.size());
       l2_batch_sq(rerank_block.data(), q, static_cast<int64_t>(shortlisted.size()), dims,
                   rerank_dists.data());
+      const auto stage_rerank = std::chrono::steady_clock::now();
       double boundary = 0.0;   // largest exact distance inside the shortlist
       for (size_t s = 0; s < shortlisted.size(); ++s) {
         const size_t idx = static_cast<size_t>(shortlisted[s].idx);
@@ -1338,13 +1342,17 @@ Result Database::exec_select(const Stmt& st) {
         }
         if (qtime) {
           const auto emit_done = std::chrono::steady_clock::now();
+          auto us = [](const std::chrono::steady_clock::time_point& a,
+                       const std::chrono::steady_clock::time_point& b) {
+            return std::chrono::duration<double, std::micro>(b - a).count();
+          };
           std::fprintf(stderr,
-                       "[coarse] prescan=%.1fus coarse=%.1fus guard_rerank=%.1fus emit=%.1fus n=%zu\n",
-                       std::chrono::duration<double, std::micro>(coarse_done - qt_entry).count(),
-                       std::chrono::duration<double, std::micro>(guard_done - coarse_done).count(),
-                       std::chrono::duration<double, std::micro>(guard_done - coarse_done).count(),
-                       std::chrono::duration<double, std::micro>(emit_done - guard_done).count(),
-                       r.rows.size());
+                       "[coarse] total=%.1fus codes=%.1f scan=%.1f gather=%.1f rerank=%.1f "
+                       "heap=%.1f sort=%.1f emit=%.1f n=%zu\n",
+                       us(qt_entry, emit_done), us(qt_entry, stage_codes), us(stage_codes, stage_scan),
+                       us(stage_scan, stage_gather), us(stage_gather, stage_rerank),
+                       us(stage_rerank, coarse_done), us(coarse_done, guard_done),
+                       us(guard_done, emit_done), r.rows.size());
         }
         return r;
       }
@@ -1379,7 +1387,7 @@ Result Database::exec_select(const Stmt& st) {
           coarse_sq.resize(n);
           q_codes.resize(static_cast<size_t>(dims));
           for (int64_t d = 0; d < dims; ++d) {
-            const float scaled = (q[d] - t->cache_i8_min) / t->cache_i8_scale;
+            const float scaled = (q[d] - t->cache_i8_min) * t->cache_i8_inv_scale;
             int32_t code = static_cast<int32_t>(scaled + 0.5f);
             if (code < 0) code = 0;
             if (code > 254) code = 254;

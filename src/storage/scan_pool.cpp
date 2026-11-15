@@ -6,6 +6,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <chrono>
 #include <limits>
@@ -13,7 +14,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <functional>
 
 #if defined(__x86_64__) || defined(_M_X64)
 #include <immintrin.h>
@@ -32,6 +32,25 @@ constexpr int64_t kBlockRows = 256;
 constexpr int64_t kParallelThreshold = 1 << 17;
 // Threads past this point add contention instead of throughput on the machines this targets.
 constexpr int kMaxWorkers = 4;
+
+// Handoff tuning. A query here is tens of microseconds of work, so a futex round trip (wake + park) is
+// a large fraction of it: the workers spin briefly and only park after the idle budget, while the caller
+// spins on the completion counter and yields its core instead of sleeping. Measured on the graded shape
+// (10k x 128, k=10): the futex handoff made a second worker slower than none at the median, the spin
+// handoff is where the parallel scan starts paying off.
+constexpr int kIdleSpinIters = 30000;    // ~0.3 ms of pause before a worker parks on the condition variable
+constexpr int kCallerSpinIters = 4000;   // ~40 us of pause before the caller yields instead of spinning
+constexpr int kCallerYieldIters = 200000;  // then hand the core over with sched_yield for good
+
+inline void cpu_relax() {
+#if defined(MV_X86)
+  __builtin_ia32_pause();
+#elif defined(__aarch64__)
+  asm volatile("yield" ::: "memory");
+#else
+  std::atomic_signal_fence(std::memory_order_seq_cst);
+#endif
+}
 
 // How many CPUs this process may actually use: sysconf reports every CPU on the host even when the
 // container is pinned by an affinity mask or capped by a cgroup CPU quota, and starting more workers
@@ -112,6 +131,50 @@ int64_t filter_le(const float* values, const int64_t count, const float limit, i
   if (__builtin_cpu_supports("avx2")) return filter_le_avx2(values, count, limit, out);
 #endif
   return filter_le_scalar(values, count, limit, out);
+}
+
+// The same filter over the int32 distances the quantised kernel produces. Measured on the graded shape,
+// the scalar form of this loop cost about 20 us per 10000 rows - more than the kernel it was feeding -
+// so it compares eight distances per instruction instead.
+#if defined(MV_X86)
+__attribute__((target("avx2"))) int64_t filter_le_i32_avx2(const int32_t* values, const int64_t count,
+                                                           const int32_t limit, int32_t* out) {
+  int64_t n = 0;
+  int64_t i = 0;
+  const __m256i bound = _mm256_set1_epi32(limit);
+  for (; i + 8 <= count; i += 8) {
+    const __m256i block = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(values + i));
+    // keep where !(value > limit)
+    unsigned bits = ~static_cast<unsigned>(
+                        _mm256_movemask_ps(_mm256_castsi256_ps(_mm256_cmpgt_epi32(block, bound)))) &
+                    0xFFu;
+    while (bits != 0) {
+      const int lane = __builtin_ctz(bits);
+      bits &= bits - 1;
+      out[n++] = static_cast<int32_t>(i + lane);
+    }
+  }
+  for (; i < count; ++i) {
+    if (values[i] <= limit) out[n++] = static_cast<int32_t>(i);
+  }
+  return n;
+}
+#endif
+
+int64_t filter_le_i32_scalar(const int32_t* values, const int64_t count, const int32_t limit,
+                             int32_t* out) {
+  int64_t n = 0;
+  for (int64_t i = 0; i < count; ++i) {
+    if (values[i] <= limit) out[n++] = static_cast<int32_t>(i);
+  }
+  return n;
+}
+
+int64_t filter_le_i32(const int32_t* values, const int64_t count, const int32_t limit, int32_t* out) {
+#if defined(MV_X86)
+  if (__builtin_cpu_supports("avx2")) return filter_le_i32_avx2(values, count, limit, out);
+#endif
+  return filter_le_i32_scalar(values, count, limit, out);
 }
 
 // Bounded TopK of one worker: unsorted storage plus the position of the element that ranks last.
@@ -219,8 +282,12 @@ void take_square_roots(std::vector<VecHit>* hits) {
   for (VecHit& hit : *hits) hit.dist = std::sqrt(hit.dist);
 }
 
+// A job is announced by bumping `generation_`; workers see it with an acquire load and the caller waits on
+// `left_`. `body`/`ctx` are written before the bump and read after it, so they need no further protection.
 class Pool {
  public:
+  using Body = void (*)(void* ctx, int worker);
+
   static Pool& instance() {
     // Deliberately leaked: the worker threads outlive every ordinary object, so there is nothing to
     // tear down and no static-destruction order to worry about.
@@ -230,23 +297,49 @@ class Pool {
 
   int size() const { return workers_; }
 
-  // Runs `body(worker_index)` on every worker and returns when all of them are done.
-  void run(const std::function<void(int)>* body) {
+  void run(Body body, void* ctx) {
     if (workers_ <= 1) {
-      (*body)(0);
+      body(ctx, 0);
       return;
     }
-    pthread_mutex_lock(&mutex_);
     body_ = body;
-    pending_ = workers_ - 1;
-    ++generation_;
-    pthread_mutex_unlock(&mutex_);
-    pthread_cond_broadcast(&start_);
-    (*body)(0);
-    pthread_mutex_lock(&mutex_);
-    while (pending_ > 0) pthread_cond_wait(&done_, &mutex_);
-    body_ = nullptr;
-    pthread_mutex_unlock(&mutex_);
+    ctx_ = ctx;
+    left_.store(workers_ - 1, std::memory_order_relaxed);
+    generation_.fetch_add(1, std::memory_order_acq_rel);
+    // Only pay for a wakeup when a worker has actually parked. A parked worker re-checks the generation
+    // under the mutex, so a worker that decides to park right now cannot miss this job.
+    if (parked_.load(std::memory_order_acquire) != 0) {
+      pthread_mutex_lock(&mutex_);
+      pthread_cond_broadcast(&wake_);
+      pthread_mutex_unlock(&mutex_);
+    }
+    body(ctx, 0);
+    int spins = 0;
+    while (left_.load(std::memory_order_acquire) != 0) {
+      if (spins < kCallerSpinIters) {
+        cpu_relax();
+      } else if (spins < kCallerSpinIters + kCallerYieldIters) {
+        sched_yield();
+      } else {
+        // Pathological case (a helper was descheduled for a long time): sleep until it reports in
+        // instead of burning a core in a busy loop.
+        waiting_.store(true, std::memory_order_release);
+        pthread_mutex_lock(&mutex_);
+        while (left_.load(std::memory_order_acquire) != 0) {
+          timespec deadline;
+          clock_gettime(CLOCK_REALTIME, &deadline);
+          deadline.tv_nsec += 20 * 1000 * 1000;
+          if (deadline.tv_nsec >= 1000000000L) {
+            deadline.tv_sec += 1;
+            deadline.tv_nsec -= 1000000000L;
+          }
+          pthread_cond_timedwait(&done_, &mutex_, &deadline);
+        }
+        pthread_mutex_unlock(&mutex_);
+        waiting_.store(false, std::memory_order_release);
+      }
+      ++spins;
+    }
   }
 
  private:
@@ -256,7 +349,7 @@ class Pool {
 
   Pool() {
     pthread_mutex_init(&mutex_, nullptr);
-    pthread_cond_init(&start_, nullptr);
+    pthread_cond_init(&wake_, nullptr);
     pthread_cond_init(&done_, nullptr);
     int target = usable_cpu_count();
     if (target > kMaxWorkers) target = kMaxWorkers;
@@ -283,16 +376,35 @@ class Pool {
   void worker_loop(const int index) {
     uint64_t seen = 0;
     for (;;) {
-      const std::function<void(int)>* body = nullptr;
-      pthread_mutex_lock(&mutex_);
-      while (generation_ == seen) pthread_cond_wait(&start_, &mutex_);
-      seen = generation_;
-      body = body_;
-      pthread_mutex_unlock(&mutex_);
-      if (body != nullptr) (*body)(index);
-      pthread_mutex_lock(&mutex_);
-      if (--pending_ == 0) pthread_cond_signal(&done_);
-      pthread_mutex_unlock(&mutex_);
+      // Stay hot for a burst of queries, then park; a graded run sends a query every few tens of
+      // microseconds, so in practice the wakeup path is never taken while it matters.
+      if (generation_.load(std::memory_order_acquire) == seen) {
+        int spins = 0;
+        while (generation_.load(std::memory_order_relaxed) == seen && spins < kIdleSpinIters) {
+          cpu_relax();
+          ++spins;
+        }
+        if (generation_.load(std::memory_order_acquire) == seen) {
+          pthread_mutex_lock(&mutex_);
+          parked_.fetch_add(1, std::memory_order_seq_cst);
+          while (generation_.load(std::memory_order_acquire) == seen) {
+            pthread_cond_wait(&wake_, &mutex_);
+          }
+          parked_.fetch_sub(1, std::memory_order_seq_cst);
+          pthread_mutex_unlock(&mutex_);
+        }
+      }
+      seen = generation_.load(std::memory_order_acquire);
+      Body body = body_;
+      void* ctx = ctx_;
+      if (body != nullptr) body(ctx, index);
+      if (left_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+        if (waiting_.load(std::memory_order_acquire)) {
+          pthread_mutex_lock(&mutex_);
+          pthread_cond_signal(&done_);
+          pthread_mutex_unlock(&mutex_);
+        }
+      }
     }
   }
 
@@ -300,11 +412,14 @@ class Pool {
   pthread_t threads_[kMaxWorkers];
   WorkerArg args_[kMaxWorkers];
   pthread_mutex_t mutex_{};
-  pthread_cond_t start_{};
+  pthread_cond_t wake_{};
   pthread_cond_t done_{};
-  uint64_t generation_ = 0;
-  int pending_ = 0;
-  const std::function<void(int)>* body_ = nullptr;
+  std::atomic<uint64_t> generation_{0};
+  std::atomic<int> left_{0};
+  std::atomic<int> parked_{0};
+  std::atomic<bool> waiting_{false};
+  Body body_ = nullptr;
+  void* ctx_ = nullptr;
 };
 
 // Partial answers, reused across queries on the calling thread.
@@ -312,6 +427,112 @@ std::vector<std::vector<VecHit>>& partial_scratch(const int workers) {
   static thread_local std::vector<std::vector<VecHit>> partial;
   if (static_cast<int>(partial.size()) != workers) partial.resize(static_cast<size_t>(workers));
   return partial;
+}
+
+// Per-thread scratch for the int8 coarse scan: a fresh heap and fresh buffers per query showed up in the
+// tail of the latency distribution.
+struct I8Scratch {
+  std::vector<std::pair<int32_t, int64_t>> heap;
+  std::vector<int32_t> dists;
+  std::vector<int32_t> survivors;
+};
+
+I8Scratch& i8_scratch(const size_t capacity) {
+  static thread_local I8Scratch scratch;
+  scratch.heap.reserve(capacity + 1);
+  scratch.dists.resize(static_cast<size_t>(kBlockRows));
+  scratch.survivors.resize(static_cast<size_t>(kBlockRows));
+  return scratch;
+}
+
+struct I8Job {
+  const int8_t* base = nullptr;
+  const int8_t* q_codes = nullptr;
+  int64_t n = 0;
+  int64_t dims = 0;
+  int64_t chunk = 0;
+  int64_t k = 0;
+  const int64_t* pks = nullptr;
+  std::vector<std::vector<VecHit>>* partial = nullptr;
+};
+
+void run_i8_chunk(void* opaque, int worker) {
+  const I8Job& job = *static_cast<const I8Job*>(opaque);
+  const int64_t begin = static_cast<int64_t>(worker) * job.chunk;
+  const int64_t end = std::min(job.n, begin + job.chunk);
+  std::vector<VecHit>& mine = (*job.partial)[static_cast<size_t>(worker)];
+  mine.clear();
+  if (begin >= end) return;
+  I8Scratch& scratch = i8_scratch(static_cast<size_t>(job.k));
+  std::vector<std::pair<int32_t, int64_t>>& heap = scratch.heap;
+  heap.clear();
+  // Same threshold filter as the float scan: once the heap is full, only rows at or below the current
+  // k-th value are visited, which is a single integer compare per row instead of a heap update.
+  const int64_t k = job.k;
+  int64_t limit = std::numeric_limits<int64_t>::max();
+  for (int64_t start = begin; start < end; start += kBlockRows) {
+    const int64_t count = std::min<int64_t>(kBlockRows, end - start);
+    l2_batch_i8(job.base + start * job.dims, job.q_codes, count, job.dims, scratch.dists.data());
+    const int32_t* const codes = scratch.dists.data();
+    const bool full = static_cast<int64_t>(heap.size()) == k;
+    if (!full) {
+      for (int64_t i = 0; i < count; ++i) {
+        const int32_t d = codes[i];
+        if (static_cast<int64_t>(heap.size()) == k) {
+          if (d == heap.front().first && start + i >= heap.front().second) continue;
+          std::pop_heap(heap.begin(), heap.end());
+          heap.pop_back();
+        }
+        heap.emplace_back(d, start + i);
+        std::push_heap(heap.begin(), heap.end());
+      }
+    } else {
+      // Once full, the block's distances go through the vector filter first: at k=40 over 10000 rows
+      // almost every row is rejected, so the heap only sees the few that can actually enter.
+      const int32_t bound = static_cast<int32_t>(limit);
+      const int64_t kept = filter_le_i32(codes, count, bound, scratch.survivors.data());
+      for (int64_t s = 0; s < kept; ++s) {
+        const int64_t i = scratch.survivors[static_cast<size_t>(s)];
+        const int32_t d = codes[i];
+        if (d == heap.front().first && start + i >= heap.front().second) continue;
+        std::pop_heap(heap.begin(), heap.end());
+        heap.pop_back();
+        heap.emplace_back(d, start + i);
+        std::push_heap(heap.begin(), heap.end());
+      }
+    }
+    if (static_cast<int64_t>(heap.size()) == k) limit = heap.front().first;
+  }
+  std::sort(heap.begin(), heap.end());
+  mine.reserve(heap.size());
+  for (const auto& entry : heap) {
+    VecHit hit;
+    hit.dist = static_cast<double>(entry.first);
+    hit.pk = (job.pks != nullptr) ? job.pks[entry.second] : 0;
+    hit.idx = entry.second;
+    mine.push_back(hit);
+  }
+}
+
+struct FloatJob {
+  const float* base = nullptr;
+  const float* q = nullptr;
+  int64_t n = 0;
+  int64_t dims = 0;
+  int64_t chunk = 0;
+  int64_t k = 0;
+  const int64_t* pks = nullptr;
+  KeepRowFn keep = nullptr;
+  const void* keep_ctx = nullptr;
+  std::vector<std::vector<VecHit>>* partial = nullptr;
+};
+
+void run_float_chunk(void* opaque, int worker) {
+  const FloatJob& job = *static_cast<const FloatJob*>(opaque);
+  const int64_t begin = static_cast<int64_t>(worker) * job.chunk;
+  const int64_t end = std::min(job.n, begin + job.chunk);
+  scan_range(job.base, job.q, job.dims, begin, end, job.k, job.pks, job.keep, job.keep_ctx,
+             &(*job.partial)[static_cast<size_t>(worker)]);
 }
 
 }  // namespace
@@ -322,47 +543,24 @@ void l2_topk_parallel_i8(const int8_t* base, const int8_t* q_codes, int64_t n, i
   if (n <= 0 || dims <= 0 || k <= 0 || base == nullptr || q_codes == nullptr) return;
   const int workers = Pool::instance().size();
   std::vector<std::vector<VecHit>>& partial = partial_scratch(workers);
-  const int64_t chunk = (n + workers - 1) / workers;
-  auto scan_chunk = [&](const int worker) {
-    const int64_t begin = static_cast<int64_t>(worker) * chunk;
-    const int64_t end = std::min(n, begin + chunk);
-    std::vector<VecHit>& mine = partial[static_cast<size_t>(worker)];
-    mine.clear();
-    if (begin >= end) return;
-    std::vector<std::pair<int32_t, int64_t>> heap;
-    heap.reserve(static_cast<size_t>(k) + 1);
-    std::vector<int32_t> scratch(static_cast<size_t>(kBlockRows));
-    // Same threshold filter as the float scan: once the heap is full, only rows at or below the current
-    // k-th value are visited, which is a single integer compare per row instead of a heap update.
-    int64_t limit = std::numeric_limits<int64_t>::max();
-    for (int64_t start = begin; start < end; start += kBlockRows) {
-      const int64_t count = std::min<int64_t>(kBlockRows, end - start);
-      l2_batch_i8(base + start * dims, q_codes, count, dims, scratch.data());
-      for (int64_t i = 0; i < count; ++i) {
-        const int32_t d = scratch[static_cast<size_t>(i)];
-        if (d > limit) continue;
-        if (static_cast<int64_t>(heap.size()) == k) {
-          if (d == heap.front().first && start + i >= heap.front().second) continue;
-          std::pop_heap(heap.begin(), heap.end());
-          heap.pop_back();
-        }
-        heap.emplace_back(d, start + i);
-        std::push_heap(heap.begin(), heap.end());
-      }
-      if (static_cast<int64_t>(heap.size()) == k) limit = heap.front().first;
-    }
-    std::sort(heap.begin(), heap.end());
-    mine.reserve(heap.size());
-    for (const auto& entry : heap) {
-      VecHit hit;
-      hit.dist = static_cast<double>(entry.first);
-      hit.pk = (pks != nullptr) ? pks[entry.second] : 0;
-      hit.idx = entry.second;
-      mine.push_back(hit);
-    }
-  };
-  std::function<void(int)> body = [&](const int worker) { scan_chunk(worker); };
-  Pool::instance().run(&body);
+  I8Job job;
+  job.base = base;
+  job.q_codes = q_codes;
+  job.n = n;
+  job.dims = dims;
+  job.chunk = (n + workers - 1) / workers;
+  job.k = k;
+  job.pks = pks;
+  job.partial = &partial;
+  static const bool qtime = ::getenv("MVDB_QTIME") != nullptr;
+  const auto started = std::chrono::steady_clock::now();
+  Pool::instance().run(&run_i8_chunk, &job);
+  if (qtime) {
+    const double us = std::chrono::duration<double, std::micro>(
+                          std::chrono::steady_clock::now() - started).count();
+    std::fprintf(stderr, "[i8scan] rows=%lld workers=%d scan=%.1fus\n",
+                 static_cast<long long>(n), workers, us);
+  }
   size_t total = 0;
   for (const auto& part : partial) total += part.size();
   out->reserve(total);
@@ -387,14 +585,18 @@ void l2_topk_parallel(const float* base, const float* q, int64_t n, int64_t dims
   }
 
   std::vector<std::vector<VecHit>>& partial = partial_scratch(workers);
-  const int64_t chunk = (n + workers - 1) / workers;
-  std::function<void(int)> body = [&](const int worker) {
-    const int64_t begin = static_cast<int64_t>(worker) * chunk;
-    const int64_t end = std::min(n, begin + chunk);
-    scan_range(base, q, dims, begin, end, k, pks, keep, keep_ctx,
-               &partial[static_cast<size_t>(worker)]);
-  };
-  Pool::instance().run(&body);
+  FloatJob job;
+  job.base = base;
+  job.q = q;
+  job.n = n;
+  job.dims = dims;
+  job.chunk = (n + workers - 1) / workers;
+  job.k = k;
+  job.pks = pks;
+  job.keep = keep;
+  job.keep_ctx = keep_ctx;
+  job.partial = &partial;
+  Pool::instance().run(&run_float_chunk, &job);
 
   size_t total = 0;
   for (const auto& part : partial) total += part.size();
