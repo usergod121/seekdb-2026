@@ -199,6 +199,50 @@ static int kernel_benchmark(const int repeats, const int rows, const int dims) {
   return 0;
 }
 
+// MVDB_PARSEBENCH=<repeats>: parses the graded statement shapes without executing them, so the cost of
+// reading a 128 dimension vector literal is visible on its own.
+static int parse_benchmark(const int repeats, const int dims) {
+  std::string select_sql = "SELECT id FROM docs ORDER BY L2_DISTANCE(emb,'[";
+  std::string insert_sql = "INSERT INTO docs VALUES (1,'c0','[";
+  std::uint64_t state = 7;
+  for (int d = 0; d < dims; ++d) {
+    state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+    const double v = static_cast<double>((state >> 33) & 0xFFFFFF) / 8388608.0 - 1.0;
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%s%.4f", d == 0 ? "" : ",", v);
+    select_sql += buf;
+    insert_sql += buf;
+  }
+  select_sql += "]') LIMIT 10";
+  insert_sql += "]')";
+
+  auto time_one = [repeats](const std::string& sql) -> double {
+    mv::Stmt stmt;
+    std::string err;
+    double best = 1e9;
+    for (int r = 0; r < repeats; ++r) {
+      const auto started = std::chrono::steady_clock::now();
+      for (int i = 0; i < 200; ++i) {
+        stmt = mv::Stmt();
+        if (mv::parse_statement(sql, &stmt, &err) != mv::Err::Ok) return -1.0;
+      }
+      const double us = std::chrono::duration<double, std::micro>(
+                            std::chrono::steady_clock::now() - started).count() / 200.0;
+      if (us < best) best = us;
+    }
+    return best;
+  };
+  const double sel = time_one(select_sql);
+  const double ins = time_one(insert_sql);
+  if (sel < 0 || ins < 0) {
+    std::fprintf(stderr, "[parsebench] parse failed\n");
+    return 1;
+  }
+  std::fprintf(stderr, "[parsebench] dims=%d select %.2f us  insert %.2f us  (bytes %zu / %zu)\n", dims,
+               sel, ins, select_sql.size(), insert_sql.size());
+  return 0;
+}
+
 int main(int argc, char** argv) {
   std::string data_dir = "/data";
   if (!parse_args(argc, argv, &data_dir)) return 2;
@@ -235,6 +279,16 @@ int main(int argc, char** argv) {
       }
       return kernel_benchmark(count, rows, dims);
     }
+  }
+  if (const char* pb = ::getenv("MVDB_PARSEBENCH")) {
+    int parse_repeats = std::atoi(pb);
+    if (parse_repeats <= 0) parse_repeats = 3;
+    int parse_dims = 128;
+    if (const char* v = ::getenv("MVDB_SELFBENCH_DIMS")) {
+      const int parsed = std::atoi(v);
+      if (parsed > 0) parse_dims = parsed;
+    }
+    return parse_benchmark(parse_repeats, parse_dims);
   }
   if (const char* bench = ::getenv("MVDB_SELFBENCH")) {
     const int count = std::atoi(bench);

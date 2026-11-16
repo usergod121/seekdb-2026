@@ -1238,7 +1238,7 @@ Result Database::exec_select(const Stmt& st) {
     }
   }
 
-  static const bool qtime = ::getenv("MVDB_QTIME") != nullptr;
+  static const bool qtime = ::getenv("MVDB_ETIME") != nullptr;
   const auto qt_entry = std::chrono::steady_clock::now();
   // ---- fast path: one ascending L2 ordering with a LIMIT -> bounded heap of size K ----
   if (magnitudes_safe && cached && st.order_by.size() == 1 && !order_l2[0].q.empty() &&

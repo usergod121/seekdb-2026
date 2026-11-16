@@ -1,5 +1,7 @@
 #include "sql/lexer.h"
 
+#include <cstdint>
+
 #include <cctype>
 #include <cerrno>
 #include <cstdlib>
@@ -27,6 +29,75 @@ bool is_digit(const char c) { return c >= '0' && c <= '9'; }
 bool is_ident_char(const unsigned char c) {
   return std::isalnum(c) != 0 || c == '_' || c >= 0x80 ||
          std::memchr("$", c, 1) != nullptr;
+}
+
+}  // namespace
+
+namespace {
+
+// Exact powers of ten that fit in a double without rounding.
+const double kPow10[] = {1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11,
+                         1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22};
+
+// Parses a plain decimal literal whose value is mantissa * 10^exp with mantissa an exact 64-bit integer
+// (at most 15 significant digits) and |exp| <= 22. For those inputs the arithmetic below is exact in
+// doubles and IEEE rounding gives precisely the double strtod would return, so this cannot change a
+// parsed value; anything outside that envelope returns false and the caller uses strtod.
+inline bool parse_decimal_fast(const char* p, const char* end, double* out) {
+  const char* q = p;
+  bool negative = false;
+  if (q < end && (*q == '-' || *q == '+')) {
+    negative = (*q == '-');
+    ++q;
+  }
+  if (q >= end || *q < '0' || *q > '9') return false;
+  std::uint64_t mantissa = 0;
+  int significant = 0;
+  int exponent = 0;
+  bool seen_dot = false;
+  const char* start_digits = q;
+  while (q < end) {
+    const char c = *q;
+    if (c >= '0' && c <= '9') {
+      if (significant >= 15) return false;   // more precision than the envelope allows
+      mantissa = mantissa * 10 + static_cast<std::uint64_t>(c - '0');
+      if (mantissa != 0) ++significant;
+      if (seen_dot) --exponent;
+      ++q;
+    } else if (c == '.' && !seen_dot) {
+      seen_dot = true;
+      ++q;
+    } else {
+      break;
+    }
+  }
+  if (q == start_digits) return false;
+  if (q < end && (*q == 'e' || *q == 'E')) {
+    ++q;
+    bool exp_negative = false;
+    if (q < end && (*q == '-' || *q == '+')) {
+      exp_negative = (*q == '-');
+      ++q;
+    }
+    if (q >= end || *q < '0' || *q > '9') return false;
+    int exp = 0;
+    while (q < end && *q >= '0' && *q <= '9') {
+      exp = exp * 10 + (*q - '0');
+      if (exp > 400) return false;
+      ++q;
+    }
+    exponent += exp_negative ? -exp : exp;
+  }
+  if (q != end) return false;                  // trailing junk: let strtod deal with it
+  if (exponent > 22 || exponent < -22) return false;
+  double value = static_cast<double>(mantissa);
+  if (exponent > 0) {
+    value *= kPow10[exponent];
+  } else if (exponent < 0) {
+    value /= kPow10[-exponent];
+  }
+  *out = negative ? -value : value;
+  return true;
 }
 
 }  // namespace
@@ -108,9 +179,13 @@ bool tokenize(const std::string& sql, std::vector<Token>* out, std::string* err)
       t.text = sql.substr(i, j - i);
       if (is_float) {
         t.kind = Tok::Float;
-        // strip a leading '+' so strtod sees a plain number
+        // Vector literals are one float token per dimension, so this path decides how fast a TopK query
+        // can even be parsed: strtod costs ~60 ns per call and a 128 dimension literal has 128 of them.
         const char* digits = (sql[i] == '+') ? t.text.c_str() + 1 : t.text.c_str();
-        t.f = std::strtod(digits, nullptr);
+        const char* digits_end = t.text.c_str() + t.text.size();
+        if (!parse_decimal_fast(digits, digits_end, &t.f)) {
+          t.f = std::strtod(digits, nullptr);
+        }
         if (negative) t.f = -t.f;
       } else {
         t.kind = Tok::Integer;
