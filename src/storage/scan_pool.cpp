@@ -435,7 +435,8 @@ struct I8Scratch {
   // Candidates ordered only by "not worse than the current k-th value". Refilled from the threshold
   // filter and compacted back to k once in a while: measured on the graded shape, updating a heap for
   // each of the ~300 survivors a 5000-row slice produces cost 12 us, while two compactions cost ~1 us.
-  std::vector<std::pair<int32_t, int64_t>> cand;
+  // (distance, row) packed as one key: distance in the high 32 bits, row in the low 32.
+  std::vector<uint64_t> cand;
   std::vector<int32_t> dists;
   std::vector<int32_t> survivors;
 };
@@ -448,23 +449,26 @@ I8Scratch& i8_scratch(const size_t capacity) {
   return scratch;
 }
 
-inline bool cand_before(const std::pair<int32_t, int64_t>& a, const std::pair<int32_t, int64_t>& b) {
-  if (a.first != b.first) return a.first < b.first;
-  return a.second < b.second;
+inline uint64_t key_of(const int32_t dist, const int64_t row) {
+  return (static_cast<uint64_t>(static_cast<uint32_t>(dist)) << 32) | static_cast<uint64_t>(row);
 }
+
+inline int32_t key_dist(const uint64_t key) { return static_cast<int32_t>(key >> 32); }
+
+inline int64_t key_row(const uint64_t key) { return static_cast<int64_t>(key & 0xFFFFFFFFu); }
 
 // Keeps the k best by (distance, row) and returns the k-th distance, which the threshold filter then
 // uses to reject rows without touching the candidate list.
-int32_t compact_candidates(std::vector<std::pair<int32_t, int64_t>>* cand, const int64_t k) {
-  std::vector<std::pair<int32_t, int64_t>>& v = *cand;
+int32_t compact_candidates(std::vector<uint64_t>* cand, const int64_t k) {
+  std::vector<uint64_t>& v = *cand;
   if (static_cast<int64_t>(v.size()) <= k) {
-    std::sort(v.begin(), v.end(), cand_before);
-    return static_cast<int32_t>(v.empty() ? std::numeric_limits<int32_t>::max() : v.back().first);
+    std::sort(v.begin(), v.end());
+    return v.empty() ? std::numeric_limits<int32_t>::max() : key_dist(v.back());
   }
-  std::nth_element(v.begin(), v.begin() + k, v.end(), cand_before);
+  std::nth_element(v.begin(), v.begin() + k, v.end());
   v.resize(static_cast<size_t>(k));
-  std::sort(v.begin(), v.end(), cand_before);
-  return v.back().first;
+  std::sort(v.begin(), v.end());
+  return key_dist(v.back());
 }
 
 struct I8Job {
@@ -487,7 +491,7 @@ void run_i8_chunk(void* opaque, int worker) {
   mine.clear();
   if (begin >= end) return;
   I8Scratch& scratch = i8_scratch(static_cast<size_t>(job.k));
-  std::vector<std::pair<int32_t, int64_t>>& cand = scratch.cand;
+  std::vector<uint64_t>& cand = scratch.cand;
   cand.clear();
   const int64_t k = job.k;
   // Running k-th distance. Rows above it cannot enter the shortlist, so they never reach the candidate
@@ -513,7 +517,7 @@ void run_i8_chunk(void* opaque, int worker) {
     if (static_cast<int64_t>(cand.size()) < k) {
       // Still filling: everything is a candidate until the k-th smallest is known.
       for (int64_t i = 0; i < count; ++i) {
-        cand.emplace_back(codes[i], start + i);
+        cand.push_back(key_of(codes[i], start + i));
       }
       if (static_cast<int64_t>(cand.size()) >= k) limit = compact_candidates(&cand, k);
     } else {
@@ -524,13 +528,13 @@ void run_i8_chunk(void* opaque, int worker) {
       // memmove, and the worst entry is always the threshold for the following block.
       for (int64_t s = 0; s < kept; ++s) {
         const int64_t i = scratch.survivors[static_cast<size_t>(s)];
-        const std::pair<int32_t, int64_t> entry(codes[i], start + i);
-        if (!cand_before(entry, cand.back())) continue;
-        const auto at = std::lower_bound(cand.begin(), cand.end(), entry, cand_before);
+        const uint64_t entry = key_of(codes[i], start + i);
+        if (entry >= cand.back()) continue;
+        const auto at = std::lower_bound(cand.begin(), cand.end(), entry);
         cand.insert(at, entry);
         cand.pop_back();
       }
-      if (!cand.empty()) limit = cand.back().first;
+      if (!cand.empty()) limit = key_dist(cand.back());
       if (qtime) {
         const auto t3 = std::chrono::steady_clock::now();
         filter_us += std::chrono::duration<double, std::micro>(t2 - t1).count();
@@ -551,11 +555,11 @@ void run_i8_chunk(void* opaque, int worker) {
                  push_us, static_cast<long long>(visits));
   }
   mine.reserve(cand.size());
-  for (const auto& entry : cand) {
+  for (const uint64_t entry : cand) {
     VecHit hit;
-    hit.dist = static_cast<double>(entry.first);
-    hit.pk = (job.pks != nullptr) ? job.pks[entry.second] : 0;
-    hit.idx = entry.second;
+    hit.dist = static_cast<double>(key_dist(entry));
+    hit.pk = (job.pks != nullptr) ? job.pks[key_row(entry)] : 0;
+    hit.idx = key_row(entry);
     mine.push_back(hit);
   }
 }
