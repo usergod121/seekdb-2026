@@ -528,7 +528,12 @@ Result Database::execute_one(const std::string& sql_text) {
     return res;
   }
   const uint64_t prof_copy_start = Prof::on() ? Prof::now() : 0;
-  const std::string sql = sql_text.substr(b, e - b);
+  // The copy is only needed when trimming actually moved an edge. A request that arrives as one statement
+  // with no surrounding whitespace and no terminator - which is what a driver sends - would otherwise pay a
+  // full copy of its text on every call.
+  std::string trimmed;
+  if (b != 0 || e != sql_text.size()) trimmed = sql_text.substr(b, e - b);
+  const std::string& sql = (b == 0 && e == sql_text.size()) ? sql_text : trimmed;
   if (Prof::on()) Prof::add(kProfCopyStmt, Prof::now() - prof_copy_start);
 
   Stmt st;

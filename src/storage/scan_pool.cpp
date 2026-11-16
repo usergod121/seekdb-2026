@@ -609,21 +609,26 @@ void l2_topk_parallel_i8(const int8_t* base, const int8_t* q_codes, int64_t n, i
   i8_prepare_query(q_codes, dims, &prep);
   job.prep = &prep;
   job.partial = &partial;
-  static const bool qtime = ::getenv("MVDB_QTIME") != nullptr;
+  static const bool qtime = ::getenv("MVDB_ETIME") != nullptr;
   const auto started = std::chrono::steady_clock::now();
   Pool::instance().run(&run_i8_chunk, &job);
-  if (qtime) {
-    const double us = std::chrono::duration<double, std::micro>(
-                          std::chrono::steady_clock::now() - started).count();
-    std::fprintf(stderr, "[i8scan] rows=%lld workers=%d scan=%.1fus\n",
-                 static_cast<long long>(n), workers, us);
-  }
+  const auto scanned = std::chrono::steady_clock::now();
   size_t total = 0;
   for (const auto& part : partial) total += part.size();
   out->reserve(total);
   for (const auto& part : partial) out->insert(out->end(), part.begin(), part.end());
   std::sort(out->begin(), out->end(), ranks_before);
   if (static_cast<int64_t>(out->size()) > k) out->resize(static_cast<size_t>(k));
+  if (qtime) {
+    const auto done = std::chrono::steady_clock::now();
+    auto us = [](const std::chrono::steady_clock::time_point& a,
+                 const std::chrono::steady_clock::time_point& b) {
+      return std::chrono::duration<double, std::micro>(b - a).count();
+    };
+    std::fprintf(stderr, "[i8scan] rows=%lld workers=%d run=%.1fus merge=%.1fus total=%.1fus\n",
+                 static_cast<long long>(n), workers, us(started, scanned), us(scanned, done),
+                 us(started, done));
+  }
 }
 
 int scan_worker_count() { return Pool::instance().size(); }
