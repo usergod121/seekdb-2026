@@ -27,7 +27,7 @@ namespace mv {
 namespace {
 
 // Rows per block inside a worker: small enough to stay in cache, large enough to amortise the call.
-constexpr int64_t kBlockRows = 256;
+constexpr int64_t kBlockRows = 512;
 // Below this many comparisons the pool is not worth waking up.
 constexpr int64_t kParallelThreshold = 1 << 17;
 // Threads past this point add contention instead of throughput on the machines this targets.
