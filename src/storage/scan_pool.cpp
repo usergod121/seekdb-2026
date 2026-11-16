@@ -502,8 +502,9 @@ void run_i8_chunk(void* opaque, int worker) {
   for (int64_t start = begin; start < end; start += kBlockRows) {
     const int64_t count = std::min<int64_t>(kBlockRows, end - start);
     const auto t0 = std::chrono::steady_clock::now();
-    l2_batch_i8_norms(job.base + start * job.dims, job.q_codes, count, job.dims, job.norm_sq,
-                      scratch.dists.data());
+    // The row-norm array is indexed by row, so a block starting at 'start' must pass norm_sq + start.
+    l2_batch_i8_norms(job.base + start * job.dims, job.q_codes, count, job.dims,
+                      job.norm_sq == nullptr ? nullptr : job.norm_sq + start, scratch.dists.data());
     const auto t1 = std::chrono::steady_clock::now();
     if (qtime) {
       kernel_us += std::chrono::duration<double, std::micro>(t1 - t0).count();

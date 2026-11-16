@@ -441,12 +441,16 @@ __attribute__((target("avx2,avxvnni"))) void l2_batch_i8_vnni(const int8_t* base
                                                              const int8_t* q_codes,
                                                              const int64_t n, const int64_t dims,
                                                              const int32_t* norm_sq, int32_t* out) {
-  int32_t q_sum = 0;
+  // The vector loop covers the first (dims/32)*32 dimensions; the bias correction below applies only to
+  // those, and the tail joins the cross term one dimension at a time, so the identity still spans every
+  // dimension exactly once.
+  const int64_t prefix = (dims / 32) * 32;
+  int32_t q_sum_prefix = 0;
   int32_t q_norm = 0;
   for (int64_t d = 0; d < dims; ++d) {
     const int32_t v = static_cast<int32_t>(q_codes[d]);
-    q_sum += v;
     q_norm += v * v;
+    if (d < prefix) q_sum_prefix += v;
   }
   const __m256i bias = _mm256_set1_epi8(static_cast<char>(0x80));
   int64_t i = 0;
@@ -478,13 +482,11 @@ __attribute__((target("avx2,avxvnni"))) void l2_batch_i8_vnni(const int8_t* base
     __m256i accs[4] = {a0, a1, a2, a3};
     const int8_t* list[4] = {r0, r1, r2, r3};
     for (int r = 0; r < 4; ++r) {
-      const int32_t cross = hsum_i32(accs[r]) - 128 * q_sum;
-      int32_t value = q_norm + norm_sq[i + r] - 2 * cross;
-      for (int64_t dd = d; dd < dims; ++dd) {
-        const int32_t diff = static_cast<int32_t>(list[r][dd]) - static_cast<int32_t>(q_codes[dd]);
-        value += diff * diff;
+      int32_t cross = hsum_i32(accs[r]) - 128 * q_sum_prefix;
+      for (int64_t dd = prefix; dd < dims; ++dd) {
+        cross += static_cast<int32_t>(list[r][dd]) * static_cast<int32_t>(q_codes[dd]);
       }
-      out[i + r] = value;
+      out[i + r] = q_norm + norm_sq[i + r] - 2 * cross;
     }
   }
   for (; i < n; ++i) {
