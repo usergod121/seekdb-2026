@@ -265,6 +265,217 @@ Err Database::load_catalog() {
   return c.ok ? Err::Ok : Err::IoError;
 }
 
+// Parses a vector literal's text with the executor's number reader (defined in exec.cpp).
+bool parse_vector_text(const std::string& text, std::vector<float>* out);
+
+namespace {
+
+// ---- compact INSERT records -------------------------------------------------------------------
+// Layout (little endian):
+//   'B' uint32 payload_len payload
+//   payload: uint16 table_len, table, uint16 col_count, (uint16 len, name)*, uint16 row_count,
+//            (uint16 value_count, value*)*
+//   value:   'i' int64 | 'f' double | 's' uint32 len, bytes | 'v' uint32 dims, dims*float
+// Everything is length prefixed so a torn tail is rejected by the existing record walker.
+
+void wal_put_u16(std::string* out, const uint16_t v) {
+  out->push_back(static_cast<char>(v & 0xFF));
+  out->push_back(static_cast<char>((v >> 8) & 0xFF));
+}
+
+void wal_put_u32(std::string* out, const uint32_t v) {
+  for (int i = 0; i < 4; ++i) out->push_back(static_cast<char>((v >> (8 * i)) & 0xFF));
+}
+
+void wal_put_i64(std::string* out, const int64_t v) {
+  for (int i = 0; i < 8; ++i) out->push_back(static_cast<char>((v >> (8 * i)) & 0xFF));
+}
+
+void wal_put_raw(std::string* out, const void* data, const size_t size) {
+  out->append(static_cast<const char*>(data), size);
+}
+
+bool wal_serializable(const Expr& e) {
+  return e.kind == ExprKind::IntLit || e.kind == ExprKind::FloatLit || e.kind == ExprKind::StrLit ||
+         e.kind == ExprKind::VectorLit;
+}
+
+// Builds the payload for an INSERT, converting a quoted vector literal in a vector column into binary
+// floats with the executor's own reader. Returns false for anything else, and the caller logs the text.
+bool wal_serialize_insert(const Stmt& st, const Table& table, std::string* payload) {
+  if (st.rows.empty() || st.rows.size() > 0xFFFF || st.table.size() > 0xFFFF) return false;
+  if (st.insert_columns.size() > 0xFFFF) return false;
+  // Map each value position to its column, exactly as the executor will.
+  std::vector<int> target;
+  target.reserve(st.insert_columns.empty() ? table.columns.size() : st.insert_columns.size());
+  if (st.insert_columns.empty()) {
+    for (size_t c = 0; c < table.columns.size(); ++c) target.push_back(static_cast<int>(c));
+  } else {
+    for (const std::string& name : st.insert_columns) {
+      int found = -1;
+      const std::string wanted = lower_ascii(name);
+      for (size_t c = 0; c < table.columns.size(); ++c) {
+        if (lower_ascii(table.columns[c].name) == wanted) {
+          found = static_cast<int>(c);
+          break;
+        }
+      }
+      if (found < 0) return false;
+      target.push_back(found);
+    }
+  }
+
+  payload->clear();
+  wal_put_u16(payload, static_cast<uint16_t>(st.table.size()));
+  payload->append(st.table);
+  wal_put_u16(payload, static_cast<uint16_t>(st.insert_columns.size()));
+  for (const std::string& name : st.insert_columns) {
+    if (name.size() > 0xFFFF) return false;
+    wal_put_u16(payload, static_cast<uint16_t>(name.size()));
+    payload->append(name);
+  }
+  wal_put_u16(payload, static_cast<uint16_t>(st.rows.size()));
+  std::vector<float> floats;
+  for (const std::vector<ExprPtr>& row : st.rows) {
+    if (row.size() != target.size() || row.size() > 0xFFFF) return false;
+    wal_put_u16(payload, static_cast<uint16_t>(row.size()));
+    for (size_t i = 0; i < row.size(); ++i) {
+      const Expr& value = *row[i];
+      if (!wal_serializable(value)) return false;
+      const bool vector_column = table.columns[static_cast<size_t>(target[i])].type == ColType::Vector;
+      if (value.kind == ExprKind::VectorLit) {
+        payload->push_back('v');
+        wal_put_u32(payload, static_cast<uint32_t>(value.vec.size()));
+        wal_put_raw(payload, value.vec.data(), value.vec.size() * sizeof(float));
+      } else if (vector_column && value.kind == ExprKind::StrLit) {
+        if (!parse_vector_text(value.s, &floats)) return false;
+        payload->push_back('v');
+        wal_put_u32(payload, static_cast<uint32_t>(floats.size()));
+        wal_put_raw(payload, floats.data(), floats.size() * sizeof(float));
+      } else if (value.kind == ExprKind::IntLit) {
+        payload->push_back('i');
+        wal_put_i64(payload, value.i);
+      } else if (value.kind == ExprKind::FloatLit) {
+        payload->push_back('f');
+        const double d = value.f;
+        wal_put_raw(payload, &d, sizeof(double));
+      } else {
+        payload->push_back('s');
+        wal_put_u32(payload, static_cast<uint32_t>(value.s.size()));
+        payload->append(value.s);
+      }
+    }
+  }
+  return true;
+}
+
+struct WalReader {
+  const unsigned char* p = nullptr;
+  size_t n = 0;
+  size_t at = 0;
+  bool ok = true;
+
+  bool need(const size_t bytes) {
+    if (!ok || at + bytes > n) {
+      ok = false;
+      return false;
+    }
+    return true;
+  }
+  uint16_t u16() {
+    if (!need(2)) return 0;
+    const uint16_t v = static_cast<uint16_t>(p[at] | (p[at + 1] << 8));
+    at += 2;
+    return v;
+  }
+  uint32_t u32() {
+    if (!need(4)) return 0;
+    uint32_t v = 0;
+    for (int i = 0; i < 4; ++i) v |= static_cast<uint32_t>(p[at + i]) << (8 * i);
+    at += 4;
+    return v;
+  }
+  int64_t i64() {
+    if (!need(8)) return 0;
+    uint64_t v = 0;
+    for (int i = 0; i < 8; ++i) v |= static_cast<uint64_t>(p[at + i]) << (8 * i);
+    at += 8;
+    return static_cast<int64_t>(v);
+  }
+  const void* raw(const size_t bytes) {
+    if (!need(bytes)) return nullptr;
+    const void* out = p + at;
+    at += bytes;
+    return out;
+  }
+};
+
+// Rebuilds the statement from the record. The values are exactly the ones that were stored, so replay
+// applies them through the executor without any text conversion in between.
+bool wal_insert_from_payload(const unsigned char* data, const size_t size, Stmt* st) {
+  WalReader r;
+  r.p = data;
+  r.n = size;
+  const uint16_t table_len = r.u16();
+  const void* table_bytes = r.raw(table_len);
+  if (table_bytes == nullptr) return false;
+  st->kind = StmtKind::Insert;
+  st->table.assign(static_cast<const char*>(table_bytes), table_len);
+  const uint16_t col_count = r.u16();
+  st->insert_columns.clear();
+  for (uint16_t c = 0; c < col_count; ++c) {
+    const uint16_t len = r.u16();
+    const void* bytes = r.raw(len);
+    if (bytes == nullptr) return false;
+    st->insert_columns.emplace_back(static_cast<const char*>(bytes), len);
+  }
+  const uint16_t row_count = r.u16();
+  if (!r.ok || row_count == 0) return false;
+  st->rows.clear();
+  st->rows.reserve(row_count);
+  for (uint16_t row = 0; row < row_count; ++row) {
+    const uint16_t value_count = r.u16();
+    if (!r.ok) return false;
+    std::vector<ExprPtr> values;
+    values.reserve(value_count);
+    for (uint16_t v = 0; v < value_count; ++v) {
+      const void* kind_byte = r.raw(1);
+      if (kind_byte == nullptr) return false;
+      const char kind = *static_cast<const unsigned char*>(kind_byte);
+      ExprPtr e(new Expr());
+      if (kind == 'i') {
+        e->kind = ExprKind::IntLit;
+        e->i = r.i64();
+      } else if (kind == 'f') {
+        e->kind = ExprKind::FloatLit;
+        const void* bytes = r.raw(sizeof(double));
+        if (bytes == nullptr) return false;
+        std::memcpy(&e->f, bytes, sizeof(double));
+      } else if (kind == 's') {
+        e->kind = ExprKind::StrLit;
+        const uint32_t len = r.u32();
+        const void* bytes = r.raw(len);
+        if (bytes == nullptr) return false;
+        e->s.assign(static_cast<const char*>(bytes), len);
+      } else if (kind == 'v') {
+        e->kind = ExprKind::VectorLit;
+        const uint32_t dims = r.u32();
+        const void* bytes = r.raw(static_cast<size_t>(dims) * sizeof(float));
+        if (bytes == nullptr) return false;
+        e->vec.resize(dims);
+        std::memcpy(e->vec.data(), bytes, static_cast<size_t>(dims) * sizeof(float));
+      } else {
+        return false;
+      }
+      values.push_back(std::move(e));
+    }
+    st->rows.push_back(std::move(values));
+  }
+  return r.ok;
+}
+
+}  // namespace
+
 // ---- WAL ------------------------------------------------------------------
 
 Err Database::wal_append(const std::string& sql) {
@@ -276,6 +487,23 @@ Err Database::wal_append(const std::string& sql) {
   const uint32_t len = static_cast<uint32_t>(sql.size());
   rec.append(reinterpret_cast<const char*>(&len), 4);
   rec += sql;
+  const bool ok = write_all(wal_fd_, rec.data(), rec.size());
+  if (ok && Prof::on()) Prof::count_bytes(kProfBytesWal, static_cast<int64_t>(rec.size()));
+  return ok ? Err::Ok : Err::IoError;
+}
+
+Err Database::wal_append_insert(const Stmt& st) {
+  if (wal_fd_ < 0) return Err::IoError;
+  const auto it = tables_.find(lower_ascii(st.table));
+  if (it == tables_.end()) return Err::NotSupported;
+  std::string payload;
+  if (!wal_serialize_insert(st, it->second, &payload)) return Err::NotSupported;
+  std::string rec;
+  rec.reserve(payload.size() + 5);
+  rec.push_back('B');
+  const uint32_t len = static_cast<uint32_t>(payload.size());
+  rec.append(reinterpret_cast<const char*>(&len), 4);
+  rec += payload;
   const bool ok = write_all(wal_fd_, rec.data(), rec.size());
   if (ok && Prof::on()) Prof::count_bytes(kProfBytesWal, static_cast<int64_t>(rec.size()));
   return ok ? Err::Ok : Err::IoError;
@@ -339,6 +567,7 @@ Err Database::replay_wal() {
   buf.resize(got);
 
   std::vector<std::string> pending;
+  std::vector<Stmt> pending_inserts;
   size_t pos = 0;
   bool changed = false;
   while (pos < buf.size()) {
@@ -356,7 +585,32 @@ Err Database::replay_wal() {
                        r.message.c_str());
         }
       }
+      for (Stmt& insert : pending_inserts) {
+        const Result r = exec(insert, /*replay=*/true);
+        if (r.err == Err::Ok) {
+          changed = true;
+        } else if (r.err != Err::DuplicateKey) {
+          std::fprintf(stderr, "[recovery] skipped a binary record: %s: %s\n", err_name(r.err),
+                       r.message.c_str());
+        }
+      }
       pending.clear();
+      pending_inserts.clear();
+      continue;
+    }
+    if (tag == 'B' && pos + 5 <= buf.size()) {
+      uint32_t len = 0;
+      std::memcpy(&len, buf.data() + pos + 1, 4);
+      const size_t begin = pos + 5;
+      if (begin + len > buf.size()) break;
+      Stmt insert;
+      if (!wal_insert_from_payload(reinterpret_cast<const unsigned char*>(buf.data() + begin), len,
+                                   &insert)) {
+        std::fprintf(stderr, "[recovery] a binary log record could not be read; stopping replay\n");
+        break;
+      }
+      pending_inserts.push_back(std::move(insert));
+      pos = begin + len;
       continue;
     }
     if (tag != 'S' || pos + 5 > buf.size()) break;
@@ -621,7 +875,10 @@ Result Database::execute_one(const std::string& sql_text) {
     } else if (replaying_) {
       // The statement already came from the log; writing it back would duplicate every record.
     } else {
-      if (wal_append(sql) != Err::Ok || wal_commit() != Err::Ok) {
+      Err log_rc = Err::NotSupported;
+      if (st.kind == StmtKind::Insert) log_rc = wal_append_insert(st);
+      if (log_rc == Err::NotSupported) log_rc = wal_append(sql);
+      if (log_rc != Err::Ok || wal_commit() != Err::Ok) {
         res.err = Err::IoError;
         return res;
       }

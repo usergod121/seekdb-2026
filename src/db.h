@@ -64,6 +64,9 @@ class Database {
   Err save_catalog();
 
   Err wal_append(const std::string& sql);
+  // Logs an INSERT as a compact binary record instead of its SQL text, so the log keeps the values
+  // rather than their decimal spelling. Returns Err::NotSupported for shapes it cannot carry.
+  Err wal_append_insert(const Stmt& st);
   Err wal_commit();
   Err wal_sync();
   Err checkpoint();

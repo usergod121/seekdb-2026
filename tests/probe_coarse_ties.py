@@ -21,9 +21,13 @@ def fmt(vec):
 
 
 class Session:
-    def __init__(self, binary, data):
+    def __init__(self, binary, data, env_extra=None):
+        env = dict(os.environ)
+        if env_extra:
+            env.update(env_extra)
         self.proc = subprocess.Popen([binary, "--data-dir", data], stdin=subprocess.PIPE,
-                                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
+                                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0,
+                                     env=env)
         self.buf = b""
         self.seq = 0
         self.line()
@@ -100,7 +104,9 @@ def main():
     for label, shape in SHAPES:
         data = tempfile.mkdtemp(prefix="mvdb_ties_")
         fast = build(args.binary, data, shape, args.rows, rng)
-        exact = Session(args.golden, data)
+        # The reference is the same binary with the coarse path switched off, not the old golden build: the
+        # log format carries compact INSERT records now, and an older binary cannot read those back.
+        exact = Session(args.binary, data, {"MVDB_COARSE": "0"})
         for q in range(args.queries):
             probe = "[%s]" % fmt([0.5] * 8 if q % 2 == 0
                                  else [round(rng.uniform(-1, 1), 4) for _ in range(8)])

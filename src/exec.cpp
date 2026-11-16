@@ -161,6 +161,28 @@ bool parse_plain_decimal(const char* p, const char* end, const char** after, flo
 // spelling, so both are accepted.
 // Scans "[1,2,3]" (or the quoted form) number by number: parsing a 128 dimension vector through the SQL
 // tokenizer would allocate a token per number, which would dominate the query path otherwise.
+// Parses the text of a vector literal with the same number reader the executor uses, so the values a
+// binary log record carries are exactly the values that were stored.
+bool parse_vector_text_impl(const std::string& text, std::vector<float>* out) {
+  out->clear();
+  const char* p = text.c_str();
+  const char* const end = p + text.size();
+  while (p < end && (*p == ' ' || *p == '\t')) ++p;
+  if (p < end && *p == '[') ++p;
+  bool any = false;
+  while (p < end) {
+    while (p < end && (*p == ' ' || *p == '\t' || *p == ',')) ++p;
+    if (p >= end || *p == ']') break;
+    float v = 0.0f;
+    const char* after = p;
+    if (!parse_fixed4(p, end, &after, &v) && !parse_plain_decimal(p, end, &after, &v)) return false;
+    out->push_back(v);
+    any = true;
+    p = after;
+  }
+  return any;
+}
+
 bool vector_from_expr(const Expr& e, std::vector<float>* out, const size_t reserve_hint = 0) {
   if (e.kind == ExprKind::VectorLit) {
     // 2.1: every element must be a finite float32 - a bare list can hold 1e39 or 1e400 as well, and an
@@ -1991,6 +2013,10 @@ Result Database::exec_delete(const Stmt& st, const bool replay) {
     ++r.affected;
   }
   return r;
+}
+
+bool parse_vector_text(const std::string& text, std::vector<float>* out) {
+  return parse_vector_text_impl(text, out);
 }
 
 }  // namespace mv
