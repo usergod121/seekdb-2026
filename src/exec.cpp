@@ -1398,39 +1398,51 @@ Result Database::exec_select(const Stmt& st) {
             q_codes[static_cast<size_t>(d)] = static_cast<int8_t>(code - 127);
           }
           const bool have_norms = !t->cache_i8_norm_sq.empty();
-          for (size_t i = 0; i < n; ++i) {
-            const int64_t src = static_cast<int64_t>((*group)[i]);
-            std::memcpy(codes.data() + i * static_cast<size_t>(dims),
-                        t->cache_vecs_i8.data() + src * dims, static_cast<size_t>(dims));
-            if (have_norms) group_norms[i] = t->cache_i8_norm_sq[static_cast<size_t>(src)];
+          // Read the group's rows where they live when the wide kernel can do that; only fall back to
+          // gathering them (160 KB of copy per query on the graded shape) when it cannot.
+          static const bool group_gather = ::getenv("MVDB_GROUP_GATHER") != nullptr;
+          const bool in_place = have_norms && !group_gather &&
+              l2_batch_i8_rows_norms(t->cache_vecs_i8.data(), q_codes.data(), group->data(),
+                                     static_cast<int64_t>(n), dims, t->cache_i8_norm_sq.data(),
+                                     coarse_sq.data());
+          if (!in_place) {
+            for (size_t i = 0; i < n; ++i) {
+              const int64_t src = static_cast<int64_t>((*group)[i]);
+              std::memcpy(codes.data() + i * static_cast<size_t>(dims),
+                          t->cache_vecs_i8.data() + src * dims, static_cast<size_t>(dims));
+              if (have_norms) group_norms[i] = t->cache_i8_norm_sq[static_cast<size_t>(src)];
+            }
+            l2_batch_i8_norms(codes.data(), q_codes.data(), static_cast<int64_t>(n), dims,
+                              have_norms ? group_norms.data() : nullptr, coarse_sq.data());
           }
-          l2_batch_i8_norms(codes.data(), q_codes.data(), static_cast<int64_t>(n), dims,
-                            have_norms ? group_norms.data() : nullptr, coarse_sq.data());
           int64_t take = static_cast<int64_t>(k) * 4;
           if (take < 32) take = 32;
           if (take > static_cast<int64_t>(n)) take = static_cast<int64_t>(n);
-          std::vector<int64_t> order(n);
-          for (size_t i = 0; i < n; ++i) order[i] = static_cast<int64_t>(i);
-          std::partial_sort(order.begin(), order.begin() + take, order.end(),
-                            [&coarse_sq](const int64_t a, const int64_t b) {
-                              if (coarse_sq[static_cast<size_t>(a)] != coarse_sq[static_cast<size_t>(b)]) {
-                                return coarse_sq[static_cast<size_t>(a)] < coarse_sq[static_cast<size_t>(b)];
-                              }
-                              return a < b;
-                            });
+          // Order by (quantised distance, position in the group) and keep the first `take`. A single
+          // nth_element plus a sort of the first `take` gives exactly what a partial_sort over the whole
+          // group gives; on 1250 rows the partial_sort was the largest cost in this path.
+          static thread_local std::vector<std::pair<int32_t, int32_t>> order;
+          order.resize(n);
+          for (size_t i = 0; i < n; ++i) {
+            order[i] = std::make_pair(coarse_sq[i], static_cast<int32_t>(i));
+          }
+          if (take < static_cast<int64_t>(n)) {
+            std::nth_element(order.begin(), order.begin() + take, order.end());
+          }
+          std::sort(order.begin(), order.begin() + take);
           static thread_local std::vector<float> block;
           static thread_local std::vector<float> exact;
           block.resize(static_cast<size_t>(take) * static_cast<size_t>(dims));
           exact.resize(static_cast<size_t>(take));
           for (int64_t ti = 0; ti < take; ++ti) {
-            const int64_t src = static_cast<int64_t>((*group)[static_cast<size_t>(order[static_cast<size_t>(ti)])]);
+            const int64_t src = static_cast<int64_t>((*group)[static_cast<size_t>(order[static_cast<size_t>(ti)].second)]);
             std::memcpy(block.data() + ti * dims, t->cache_vecs.data() + src * dims,
                         static_cast<size_t>(dims) * sizeof(float));
           }
           l2_batch_sq(block.data(), q, take, dims, exact.data());
           double boundary = 0.0;
           for (int64_t ti = 0; ti < take; ++ti) {
-            const int64_t src = static_cast<int64_t>((*group)[static_cast<size_t>(order[static_cast<size_t>(ti)])]);
+            const int64_t src = static_cast<int64_t>((*group)[static_cast<size_t>(order[static_cast<size_t>(ti)].second)]);
             const double d = static_cast<double>(exact[static_cast<size_t>(ti)]);
             if (d > boundary) boundary = d;
             const int64_t pk = t->cache_pks[static_cast<size_t>(src)];

@@ -35,10 +35,17 @@ void l2_batch_i8(const int8_t* base, const int8_t* q_codes, int64_t n, int64_t d
 void l2_batch_i8_norms(const int8_t* base, const int8_t* q_codes, int64_t n, int64_t dims,
                        const int32_t* norm_sq, int32_t* out);
 
+// The same arithmetic over an index list: a filtered TopK can then read its group's rows in place
+// instead of gathering them into a contiguous block first. Returns false when this build cannot do it,
+// in which case the caller gathers and uses l2_batch_i8_norms.
+bool l2_batch_i8_rows_norms(const int8_t* base, const int8_t* q_codes, const int32_t* rows,
+                            int64_t count, int64_t dims, const int32_t* norm_sq, int32_t* out);
+
 // True when the AVX-VNNI path is used (MVDB_I8_KERNEL=avx2 forces it off, for A/B and for the tests).
 bool i8_vnni_available();
 
 }  // namespace mv
+
 
 
 
