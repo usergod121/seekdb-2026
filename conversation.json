@@ -881,7 +881,7 @@
    "实例主题": "先读评测链路再写代码",
    "student_evidence": {
     "pointer": "/conversations/0/content",
-    "quote": "先把题包和评测逻辑捋清楚：哪些环节是全有全无、哪些按排名，否则写出来的东西可能根本不进榜。"
+    "quote": "不要开工。先把题包和评测逻辑捋清楚：哪些环节是全有全无、哪些按排名，否则写出来的东西可能根本不进榜。我要一张三层结构的清单，再写第一行代码。"
    },
    "result_evidence": {
     "pointer": "/experiments/0/output",
@@ -896,7 +896,7 @@
    "实例主题": "只做确定能拿分的那道题",
    "student_evidence": {
     "pointer": "/conversations/2/content",
-    "quote": "先做完第一题，它是确定能拿分的，先把它做满再回头做加赛的准入"
+    "quote": "先做完第一题，它是确定能拿分的，先把它做满再回头做加赛的准入，两头都想要反而两头空。"
    },
    "result_evidence": {
     "pointer": "/experiments/1/output",
@@ -911,7 +911,7 @@
    "实例主题": "判题原文要读成机制问题",
    "student_evidence": {
     "pointer": "/conversations/12/content",
-    "quote": "「响应前退出」说明进程死了，不是结果不对——我要能稳定复现进程死亡的输入。"
+    "quote": "先别猜 SQL。「响应前退出」说明进程死了，不是结果不对——我要能稳定复现进程死亡的输入。我的判据：去掉 ORDER BY 与 LIMIT 就正常、把 '10' 换成 10 也正常，只有两者同时出现才死。"
    },
    "result_evidence": {
     "pointer": "/experiments/2/output",
@@ -941,7 +941,7 @@
    "实例主题": "向量化：内核单独量，再压缩每行字节",
    "student_evidence": {
     "pointer": "/conversations/36/content",
-    "quote": "但抄之前先搞清楚我们的形状卡在哪。"
+    "quote": "性能必须提升，瓶颈肯定是向量化，别捡芝麻。不懂就参考一些开源的高性能的向量数据库，包括思路和参数；但抄之前先搞清楚我们的形状卡在哪。"
    },
    "result_evidence": {
     "pointer": "/experiments/4/output",
@@ -956,7 +956,7 @@
    "实例主题": "宽行：先证伪预测再改页大小",
    "student_evidence": {
     "pointer": "/conversations/20/content",
-    "quote": "失败形状是整行被拒而不是写坏一半，那页就定 64 KiB"
+    "quote": "失败形状是整行被拒而不是写坏一半，那页就定 64 KiB，并且要超限行干净拒绝、重启和硬杀后剩下的行逐字节一致。"
    },
    "result_evidence": {
     "pointer": "/experiments/5/output",
@@ -971,7 +971,7 @@
    "实例主题": "写路径：先拆阶段再动手",
    "student_evidence": {
     "pointer": "/conversations/30/content",
-    "quote": "改法要克制：只做数学等价替换（除法换乘倒数、避免逐元素扩容），不许改语义；改完给我前后对比数字。"
+    "quote": "差值是每行 9 µs，说明解析是我们自己的成本。改法要克制：只做数学等价替换（除法换乘倒数、避免逐元素扩容），不许改语义；改完给我前后对比数字。"
    },
    "result_evidence": {
     "pointer": "/experiments/6/output",
@@ -986,7 +986,7 @@
    "实例主题": "向量化：内核单独量，再压缩每行字节",
    "student_evidence": {
     "pointer": "/conversations/38/content",
-    "quote": "把内核单独量出来：同样 10000×128，float 和压缩表示各能到多少，折算成 Gfloat/s 才有意义。"
+    "quote": "先别谈整体优化，把内核单独量出来：同样 10000×128，float 和压缩表示各能到多少，折算成 Gfloat/s 才有意义。"
    },
    "result_evidence": {
     "pointer": "/experiments/7/output",
@@ -1001,7 +1001,7 @@
    "实例主题": "压缩表示粗扫 + 全精度重排，并自证答案没变",
    "student_evidence": {
     "pointer": "/conversations/40/content",
-    "quote": "别让每行都动 TopK 堆，先用第 K 名距离筛；用一分之一的量化表示粗扫，再用全精度对候选重排。"
+    "quote": "已经卡在带宽，就把每查询读的字节降下来，但排名必须还是全精度算出来的。两件事：别让每行都动 TopK 堆，先用第 K 名距离筛；用一分之一的量化表示粗扫，再用全精度对候选重排。给我召回率和顺序一致率。"
    },
    "result_evidence": {
     "pointer": "/experiments/8/output",
@@ -1016,7 +1016,7 @@
    "实例主题": "过滤查询不该全表扫",
    "student_evidence": {
     "pointer": "/conversations/34/content",
-    "quote": "如果比不过滤还慢，那这条边界必须写进局限，不能只讲收益。"
+    "quote": "那这条优化只对低基数列有效。把高基数列和低基数列放进同一张表量一次，看被放弃索引那一侧慢多少——如果比不过滤还慢，那这条边界必须写进局限，不能只讲收益。"
    },
    "result_evidence": {
     "pointer": "/experiments/9/output",
@@ -1031,7 +1031,7 @@
    "实例主题": "本地绿灯不算数，要平台结论",
    "student_evidence": {
     "pointer": "/conversations/4/content",
-    "quote": "我要的是平台给的结论，不是你本地说没问题。"
+    "quote": "我要的是平台给的结论，不是你本地说没问题。你觉得没问题就用 playwright 到官网提交一次看真实结果。"
    },
    "result_evidence": {
     "pointer": "/experiments/10/output",
@@ -1046,7 +1046,7 @@
    "实例主题": "只剩一个失败用例：按类别穷举",
    "student_evidence": {
     "pointer": "/conversations/6/content",
-    "quote": "别再一条一条猜：把测试拓展好、拓展全，按类别批量测。"
+    "quote": "只剩 1 个失败用例了，别再一条一条猜：把测试拓展好、拓展全，按类别批量测。"
    },
    "result_evidence": {
     "pointer": "/experiments/11/output",
@@ -1061,7 +1061,7 @@
    "实例主题": "不看源码的人来设计用例",
    "student_evidence": {
     "pointer": "/conversations/10/content",
-    "quote": "其余 11 条差异落在题面没定义语义的地方，不能算缺陷，只有那一条是真错。"
+    "quote": "802/813 要拆开看：其余 11 条差异落在题面没定义语义的地方，不能算缺陷，只有那一条是真错。修掉它、并只认这个用例回到 12/12，别拿通过率当成果。"
    },
    "result_evidence": {
     "pointer": "/experiments/12/output",
@@ -1076,7 +1076,7 @@
    "实例主题": "性能优化必须带两条保证",
    "student_evidence": {
     "pointer": "/conversations/22/content",
-    "quote": "不知道怎么保证就优先保证和现在的逻辑一致，可以用 A/B 测试；测试成本无所谓，你自动化去优化。"
+    "quote": "优化性能要有两条保证：旧的 bug 不能再犯、不要制造新 bug。不知道怎么保证就优先保证和现在的逻辑一致，可以用 A/B 测试；测试成本无所谓，你自动化去优化。"
    },
    "result_evidence": {
     "pointer": "/experiments/13/output",
@@ -1091,7 +1091,7 @@
    "实例主题": "过滤查询不该全表扫",
    "student_evidence": {
     "pointer": "/conversations/32/content",
-    "quote": "为什么要扫全表？建值到行号的索引，只对命中行算距离。判据：命中集小于全表一半才走这条路径，且结果必须与全表扫描逐行一致。"
+    "quote": "半数查询带 category='cN' 这种等值过滤、命中只有八分之一，为什么要扫全表？建值到行号的索引，只对命中行算距离。判据：命中集小于全表一半才走这条路径，且结果必须与全表扫描逐行一致。"
    },
    "result_evidence": {
     "pointer": "/experiments/14/output",
@@ -1136,7 +1136,7 @@
    "实例主题": "材料本身也要对齐评分细则",
    "student_evidence": {
     "pointer": "/conversations/44/content",
-    "quote": "把量表当成需求来写材料：每个实例要么有学生自己的判断和依据，要么就不要写"
+    "quote": "把量表当成需求来写材料：每个实例要么有学生自己的判断和依据，要么就不要写；档位按证据链到哪一步给，宁可低不要虚报。"
    },
    "result_evidence": {
     "pointer": "/experiments/17/output",
@@ -1166,7 +1166,7 @@
    "实例主题": "耐久性是承诺，不是选项",
    "student_evidence": {
     "pointer": "/conversations/50/content",
-    "quote": "这个要跑很多轮自动化，不是我手动点一次就算过；十万行规模也要覆盖一遍。"
+    "quote": "最难证的一条是随时硬杀：断电式重启后已经 ack 的写入必须都在、没 ack 的不能出现半条。这个要跑很多轮自动化，不是我手动点一次就算过；十万行规模也要覆盖一遍。"
    },
    "result_evidence": {
     "pointer": "/experiments/19/output",
@@ -1211,7 +1211,7 @@
    "实例主题": "噪声：只算最后一次提交",
    "student_evidence": {
     "pointer": "/conversations/74/content",
-    "quote": "别为了刷新数字反复提交。只算最后一次，那就把最后一次做成最好的那次。"
+    "quote": "性能原始指标在同一份代码上能差几百点，所以别为了刷新数字反复提交。只算最后一次，那就把最后一次做成最好的那次。"
    },
    "result_evidence": {
     "pointer": "/experiments/22/output",
@@ -1256,7 +1256,7 @@
    "实例主题": "宽行：先证伪预测再改页大小",
    "student_evidence": {
     "pointer": "/conversations/18/content",
-    "quote": "8 KiB 页下一条 60000 字节的行要跨很多页，我预测会在一半的地方破损。"
+    "quote": "8 KiB 页下一条 60000 字节的行要跨很多页，我预测会在一半的地方破损。别直接改页大小，先用 8 KiB 构建跑探针把失败形状给我看。"
    },
    "result_evidence": {
     "pointer": "/experiments/25/output",
@@ -1271,7 +1271,7 @@
    "实例主题": "写路径：先拆阶段再动手",
    "student_evidence": {
     "pointer": "/conversations/28/content",
-    "quote": "把向量维度这条轴单独拉出来测：带向量、去掉向量、只写 1 维，三种形状分别计时。"
+    "quote": "写路径那 1 秒里谁在花钱？把向量维度这条轴单独拉出来测：带向量、去掉向量、只写 1 维，三种形状分别计时。"
    },
    "result_evidence": {
     "pointer": "/experiments/26/output",
@@ -1286,7 +1286,7 @@
    "实例主题": "压缩表示粗扫 + 全精度重排，并自证答案没变",
    "student_evidence": {
     "pointer": "/conversations/42/content",
-    "quote": "重复行时短名单按位置取，更新删除打乱缓存顺序后答案会错，这两条都得先自证清白。"
+    "quote": "召回与顺序一致率给我数字，另外确认小表没走这条路——小表向量查询一旦被量化影响就是准入风险。还有并列：重复行时短名单按位置取，更新删除打乱缓存顺序后答案会错，这两条都得先自证清白。"
    },
    "result_evidence": {
     "pointer": "/experiments/27/output",
@@ -1316,7 +1316,7 @@
    "实例主题": "把崩溃复现成可重复的实验",
    "student_evidence": {
     "pointer": "/conversations/48/content",
-    "quote": "改完先跑一台带 sanitizer 的构建，越界和未定义行为零发现才算这条链闭环。"
+    "quote": "那就按「编译型谓词只在类型完全匹配时才用」这条改；改完先跑一台带 sanitizer 的构建，越界和未定义行为零发现才算这条链闭环。"
    },
    "result_evidence": {
     "pointer": "/experiments/29/output",
@@ -1376,7 +1376,7 @@
    "实例主题": "噪声：只算最后一次提交",
    "student_evidence": {
     "pointer": "/conversations/76/content",
-    "quote": "同一份代码两个版本本地更快，平台反而低了六百多分，说明我在优化一个被噪声淹没的量。"
+    "quote": "同一份代码两个版本本地更快，平台反而低了六百多分，说明我在优化一个被噪声淹没的量。把力气放回结构和验证。"
    },
    "result_evidence": {
     "pointer": "/experiments/33/output",
@@ -1451,7 +1451,7 @@
    "实例主题": "不看源码的人来设计用例",
    "student_evidence": {
     "pointer": "/conversations/8/content",
-    "quote": "让 subagent 想测试用例，极端边界一点，不给他看代码，直接对接题面标准来想"
+    "quote": "让 subagent 想测试用例，极端边界一点，不给他看代码，直接对接题面标准来想——看过实现的人写出来的用例会和实现同源。"
    },
    "result_evidence": {
     "pointer": "/experiments/38/output",
@@ -1481,7 +1481,7 @@
    "实例主题": "prompt 为什么没有分：对齐细则",
    "student_evidence": {
     "pointer": "/conversations/54/content",
-    "quote": "所以分是「实例×档位」加出来的，不是写得多就高。"
+    "quote": "所以分是「实例×档位」加出来的，不是写得多就高。先把能核对上的链路都写成实例，再看哪些能到 1.5 和 2。"
    },
    "result_evidence": {
     "pointer": "/experiments/40/output",
