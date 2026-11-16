@@ -440,18 +440,15 @@ __attribute__((target("avx2,avxvnni"))) inline int32_t hsum_i32(const __m256i ac
 __attribute__((target("avx2,avxvnni"))) void l2_batch_i8_vnni(const int8_t* base,
                                                              const int8_t* q_codes,
                                                              const int64_t n, const int64_t dims,
-                                                             const int32_t* norm_sq, int32_t* out) {
+                                                             const int32_t* norm_sq,
+                                                             const I8QueryPrep& prep,
+                                                             int32_t* out) {
   // The vector loop covers the first (dims/32)*32 dimensions; the bias correction below applies only to
   // those, and the tail joins the cross term one dimension at a time, so the identity still spans every
-  // dimension exactly once.
-  const int64_t prefix = (dims / 32) * 32;
-  int32_t q_sum_prefix = 0;
-  int32_t q_norm = 0;
-  for (int64_t d = 0; d < dims; ++d) {
-    const int32_t v = static_cast<int32_t>(q_codes[d]);
-    q_norm += v * v;
-    if (d < prefix) q_sum_prefix += v;
-  }
+  // dimension exactly once. The two query sums come in from the caller, which computes them once.
+  const int64_t prefix = prep.prefix;
+  const int32_t q_sum_prefix = prep.q_sum_prefix;
+  const int32_t q_norm = prep.q_norm;
   const __m256i bias = _mm256_set1_epi8(static_cast<char>(0x80));
   int64_t i = 0;
   for (; i + 4 <= n; i += 4) {
@@ -504,15 +501,10 @@ __attribute__((target("avx2,avxvnni"))) void l2_batch_i8_vnni(const int8_t* base
 // the graded shape: 160 KB gathered per query).
 __attribute__((target("avx2,avxvnni"))) void l2_batch_i8_rows_vnni(
     const int8_t* base, const int8_t* q_codes, const int32_t* rows, const int64_t count,
-    const int64_t dims, const int32_t* norm_sq, int32_t* out) {
-  const int64_t prefix = (dims / 32) * 32;
-  int32_t q_sum_prefix = 0;
-  int32_t q_norm = 0;
-  for (int64_t d = 0; d < dims; ++d) {
-    const int32_t v = static_cast<int32_t>(q_codes[d]);
-    q_norm += v * v;
-    if (d < prefix) q_sum_prefix += v;
-  }
+    const int64_t dims, const int32_t* norm_sq, const I8QueryPrep& prep, int32_t* out) {
+  const int64_t prefix = prep.prefix;
+  const int32_t q_sum_prefix = prep.q_sum_prefix;
+  const int32_t q_norm = prep.q_norm;
   const __m256i bias = _mm256_set1_epi8(static_cast<char>(0x80));
   int64_t i = 0;
   for (; i + 4 <= count; i += 4) {
@@ -607,10 +599,37 @@ void l2_batch_i8_norms(const int8_t* base, const int8_t* q_codes, const int64_t 
   if (n <= 0 || dims <= 0) return;
   if (norm_sq != nullptr && i8_vnni_available()) {
 #if defined(MV_X86) && defined(__GNUC__) && __GNUC__ >= 12
-    l2_batch_i8_vnni(base, q_codes, n, dims, norm_sq, out);
+    I8QueryPrep prep;
+    i8_prepare_query(q_codes, dims, &prep);
+    l2_batch_i8_vnni(base, q_codes, n, dims, norm_sq, prep, out);
     return;
 #endif
   }
+  l2_batch_i8(base, q_codes, n, dims, out);
+}
+
+void i8_prepare_query(const int8_t* q_codes, const int64_t dims, I8QueryPrep* prep) {
+  prep->prefix = (dims / 32) * 32;
+  int32_t sum = 0;
+  int32_t norm = 0;
+  for (int64_t d = 0; d < dims; ++d) {
+    const int32_t v = static_cast<int32_t>(q_codes[d]);
+    norm += v * v;
+    if (d < prep->prefix) sum += v;
+  }
+  prep->q_sum_prefix = sum;
+  prep->q_norm = norm;
+}
+
+void l2_batch_i8_prepared(const int8_t* base, const int8_t* q_codes, const I8QueryPrep& prep,
+                          const int64_t n, const int64_t dims, const int32_t* norm_sq, int32_t* out) {
+  if (n <= 0 || dims <= 0) return;
+#if defined(MV_X86) && defined(__GNUC__) && __GNUC__ >= 12
+  if (norm_sq != nullptr && i8_vnni_available()) {
+    l2_batch_i8_vnni(base, q_codes, n, dims, norm_sq, prep, out);
+    return;
+  }
+#endif
   l2_batch_i8(base, q_codes, n, dims, out);
 }
 
@@ -620,7 +639,9 @@ bool l2_batch_i8_rows_norms(const int8_t* base, const int8_t* q_codes, const int
   if (count <= 0 || dims <= 0) return true;
 #if defined(MV_X86) && defined(__GNUC__) && __GNUC__ >= 12
   if (norm_sq != nullptr && i8_vnni_available()) {
-    l2_batch_i8_rows_vnni(base, q_codes, rows, count, dims, norm_sq, out);
+    I8QueryPrep prep;
+    i8_prepare_query(q_codes, dims, &prep);
+    l2_batch_i8_rows_vnni(base, q_codes, rows, count, dims, norm_sq, prep, out);
     return true;
   }
 #endif

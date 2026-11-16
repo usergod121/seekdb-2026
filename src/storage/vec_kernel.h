@@ -41,6 +41,21 @@ void l2_batch_i8_norms(const int8_t* base, const int8_t* q_codes, int64_t n, int
 bool l2_batch_i8_rows_norms(const int8_t* base, const int8_t* q_codes, const int32_t* rows,
                             int64_t count, int64_t dims, const int32_t* norm_sq, int32_t* out);
 
+// Query-side constants the wide kernel needs: the squared norm of the query codes and the prefix sum the
+// unsigned-base bias correction uses. Computing them once per query instead of once per block removes 128
+// iterations from every block call.
+struct I8QueryPrep {
+  int64_t prefix = 0;
+  int32_t q_sum_prefix = 0;
+  int32_t q_norm = 0;
+};
+
+void i8_prepare_query(const int8_t* q_codes, int64_t dims, I8QueryPrep* prep);
+
+// Same as l2_batch_i8_norms, with the query constants supplied.
+void l2_batch_i8_prepared(const int8_t* base, const int8_t* q_codes, const I8QueryPrep& prep,
+                          int64_t n, int64_t dims, const int32_t* norm_sq, int32_t* out);
+
 // True when the AVX-VNNI path is used (MVDB_I8_KERNEL=avx2 forces it off, for A/B and for the tests).
 bool i8_vnni_available();
 

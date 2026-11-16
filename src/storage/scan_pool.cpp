@@ -480,6 +480,7 @@ struct I8Job {
   int64_t k = 0;
   const int64_t* pks = nullptr;
   const int32_t* norm_sq = nullptr;
+  const I8QueryPrep* prep = nullptr;
   std::vector<std::vector<VecHit>>* partial = nullptr;
 };
 
@@ -507,8 +508,9 @@ void run_i8_chunk(void* opaque, int worker) {
     const int64_t count = std::min<int64_t>(kBlockRows, end - start);
     const auto t0 = std::chrono::steady_clock::now();
     // The row-norm array is indexed by row, so a block starting at 'start' must pass norm_sq + start.
-    l2_batch_i8_norms(job.base + start * job.dims, job.q_codes, count, job.dims,
-                      job.norm_sq == nullptr ? nullptr : job.norm_sq + start, scratch.dists.data());
+    l2_batch_i8_prepared(job.base + start * job.dims, job.q_codes, *job.prep, count, job.dims,
+                         job.norm_sq == nullptr ? nullptr : job.norm_sq + start,
+                         scratch.dists.data());
     const auto t1 = std::chrono::steady_clock::now();
     if (qtime) {
       kernel_us += std::chrono::duration<double, std::micro>(t1 - t0).count();
@@ -603,6 +605,9 @@ void l2_topk_parallel_i8(const int8_t* base, const int8_t* q_codes, int64_t n, i
   job.k = k;
   job.pks = pks;
   job.norm_sq = norm_sq;
+  I8QueryPrep prep;
+  i8_prepare_query(q_codes, dims, &prep);
+  job.prep = &prep;
   job.partial = &partial;
   static const bool qtime = ::getenv("MVDB_QTIME") != nullptr;
   const auto started = std::chrono::steady_clock::now();
