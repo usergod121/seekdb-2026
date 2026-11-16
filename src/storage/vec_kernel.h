@@ -29,6 +29,15 @@ void l2_batch_sq(const float* base, const float* q, int64_t n, int64_t dims, flo
 // reranked with exact float distances.
 void l2_batch_i8(const int8_t* base, const int8_t* q_codes, int64_t n, int64_t dims, int32_t* out);
 
+// Same distances, free to use AVX-VNNI when the CPU has it. `norm_sq[i]` is the sum of squares of row i's
+// codes: the wide kernel needs it because it evaluates the exact identity a^2 + b^2 - 2ab instead of the
+// byte difference. The result is identical either way - it is the same integer sum, not an estimate.
+void l2_batch_i8_norms(const int8_t* base, const int8_t* q_codes, int64_t n, int64_t dims,
+                       const int32_t* norm_sq, int32_t* out);
+
+// True when the AVX-VNNI path is used (MVDB_I8_KERNEL=avx2 forces it off, for A/B and for the tests).
+bool i8_vnni_available();
+
 }  // namespace mv
 
 

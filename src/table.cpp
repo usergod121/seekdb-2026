@@ -339,6 +339,19 @@ Err Table::build_cache() {
         if (code > 254) code = 254;
         cache_vecs_i8[i] = static_cast<int8_t>(code - 127);
       }
+      // Row norms for the wide int8 kernel, which evaluates a^2 + b^2 - 2ab instead of the byte
+      // difference. Computed here and not in the scan, so a query never pays for it.
+      const size_t row_count = cache_vecs_i8.size() / static_cast<size_t>(dims);
+      cache_i8_norm_sq.resize(row_count);
+      for (size_t row = 0; row < row_count; ++row) {
+        const int8_t* const codes = cache_vecs_i8.data() + row * static_cast<size_t>(dims);
+        int32_t acc = 0;
+        for (int64_t d = 0; d < dims; ++d) {
+          const int32_t v = static_cast<int32_t>(codes[d]);
+          acc += v * v;
+        }
+        cache_i8_norm_sq[row] = acc;
+      }
     }
   }
   cache_valid = true;

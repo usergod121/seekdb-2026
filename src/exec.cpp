@@ -1280,7 +1280,9 @@ Result Database::exec_select(const Stmt& st) {
       if (shortlist < 32) shortlist = 32;
       if (shortlist > static_cast<int64_t>(rows)) shortlist = static_cast<int64_t>(rows);
       l2_topk_parallel_i8(t->cache_vecs_i8.data(), q_codes.data(), static_cast<int64_t>(rows), dims,
-                          shortlist, t->cache_pks.data(), &shortlisted);
+                          shortlist, t->cache_pks.data(),
+                          t->cache_i8_norm_sq.empty() ? nullptr : t->cache_i8_norm_sq.data(),
+                          &shortlisted);
       const auto stage_scan = std::chrono::steady_clock::now();
       // Rerank with the same kernel and the same float accumulation as the exact scan, so the order these
       // rows come back in is bit-identical to the full scan's, ties included.
@@ -1381,10 +1383,12 @@ Result Database::exec_select(const Stmt& st) {
         if (group_coarse) {
           static thread_local std::vector<int8_t> codes;
           static thread_local std::vector<int32_t> coarse_sq;
+          static thread_local std::vector<int32_t> group_norms;
           static thread_local std::vector<int8_t> q_codes;
           const size_t n = group->size();
           codes.resize(n * static_cast<size_t>(dims));
           coarse_sq.resize(n);
+          group_norms.resize(n);
           q_codes.resize(static_cast<size_t>(dims));
           for (int64_t d = 0; d < dims; ++d) {
             const float scaled = (q[d] - t->cache_i8_min) * t->cache_i8_inv_scale;
@@ -1393,12 +1397,15 @@ Result Database::exec_select(const Stmt& st) {
             if (code > 254) code = 254;
             q_codes[static_cast<size_t>(d)] = static_cast<int8_t>(code - 127);
           }
+          const bool have_norms = !t->cache_i8_norm_sq.empty();
           for (size_t i = 0; i < n; ++i) {
             const int64_t src = static_cast<int64_t>((*group)[i]);
             std::memcpy(codes.data() + i * static_cast<size_t>(dims),
                         t->cache_vecs_i8.data() + src * dims, static_cast<size_t>(dims));
+            if (have_norms) group_norms[i] = t->cache_i8_norm_sq[static_cast<size_t>(src)];
           }
-          l2_batch_i8(codes.data(), q_codes.data(), static_cast<int64_t>(n), dims, coarse_sq.data());
+          l2_batch_i8_norms(codes.data(), q_codes.data(), static_cast<int64_t>(n), dims,
+                            have_norms ? group_norms.data() : nullptr, coarse_sq.data());
           int64_t take = static_cast<int64_t>(k) * 4;
           if (take < 32) take = 32;
           if (take > static_cast<int64_t>(n)) take = static_cast<int64_t>(n);

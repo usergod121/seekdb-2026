@@ -48,6 +48,9 @@ struct Table {
   // and runs the integer kernel, which measures 2.7x the float kernel's rate. Only used to shortlist rows,
   // which are then reranked with exact distances.
   std::vector<int8_t> cache_vecs_i8;
+  // Sum of squares of each row's codes: the wide (AVX-VNNI) int8 kernel evaluates a^2 + b^2 - 2ab, so it
+  // needs the row term precomputed by build_cache rather than recomputed per query.
+  std::vector<int32_t> cache_i8_norm_sq;
   float cache_i8_scale = 0.0f;
   float cache_i8_inv_scale = 0.0f;   // 1/scale, so encoding a query needs no division per dimension
   float cache_i8_min = 0.0f;
@@ -76,6 +79,7 @@ struct Table {
     cache_pks.clear();
     cache_vecs.clear();
     cache_vecs_i8.clear();
+    cache_i8_norm_sq.clear();
     cache_i8_scale = 0.0f;
     cache_i8_inv_scale = 0.0f;
     cache_i8_min = 0.0f;

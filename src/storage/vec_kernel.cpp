@@ -4,6 +4,9 @@
 
 #if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
+#if defined(__GNUC__)
+#include <cpuid.h>
+#endif
 #define MV_X86 1
 #endif
 
@@ -213,6 +216,27 @@ bool have_avx2_fma() {
   return yes;
 }
 
+// AVX-VNNI (CPUID.07H:01H:EAX.AVX_VNNI, bit 4) is detected through CPUID directly instead of
+// __builtin_cpu_supports, whose feature string changed spelling between compiler versions.
+// Unused when the compiler is too old to emit the wide kernel at all, which is why it is marked as such.
+[[maybe_unused]] bool have_avx_vnni() {
+  static const bool yes = []() -> bool {
+#if defined(MV_X86)
+#if defined(__GNUC__)
+    if (!have_avx2_fma()) return false;
+    unsigned int eax = 0, ebx = 0, ecx = 0, edx = 0;
+    if (!__get_cpuid_count(7, 1, &eax, &ebx, &ecx, &edx)) return false;
+    return (eax & (1u << 4)) != 0;
+#else
+    return false;
+#endif
+#else
+    return false;
+#endif
+  }();
+  return yes;
+}
+
 }  // namespace
 
 void l2_batch(const float* base, const float* q, const int64_t n, const int64_t dims, float* out) {
@@ -388,6 +412,90 @@ __attribute__((target("avx2"))) void l2_batch_i8_avx2(const int8_t* base, const 
     out[i] = acc;
   }
 }
+#endif  // MV_X86
+
+#if defined(MV_X86) && defined(__GNUC__) && __GNUC__ >= 12
+// AVX-VNNI: vpdpbusd multiplies 32 unsigned bytes by 32 signed bytes and accumulates four products per
+// int32 lane, so one instruction covers 32 dimensions instead of the eight an int16 madd pair covers.
+// It cannot compute (a-b)^2 directly (the difference needs more than 8 bits), so it computes the cross
+// term of the exact identity
+//
+//     sum (b - a)^2 = sum a^2 + sum b^2 - 2 sum a*b
+//
+// with the base bytes biased into the unsigned operand: XOR with 0x80 turns the two's-complement int8
+// b into (b + 128) as an unsigned byte, and sum (b+128)*a = sum b*a + 128*sum a recovers the cross term.
+// Every term stays far inside int32 (|sum a*b| <= 128*127*127 = 2.06e6, the squared distance <= 8.3e6),
+// so the result is bit-identical to the AVX2 path, not an approximation of it.
+// Horizontal sum of eight int32 lanes. A separate function because a lambda body inside a
+// target-attributed function does not inherit the target and cannot inline these intrinsics.
+__attribute__((target("avx2,avxvnni"))) inline int32_t hsum_i32(const __m256i acc) {
+  __m128i lo = _mm256_castsi256_si128(acc);
+  __m128i hi = _mm256_extracti128_si256(acc, 1);
+  __m128i s = _mm_add_epi32(lo, hi);
+  s = _mm_hadd_epi32(s, s);
+  s = _mm_hadd_epi32(s, s);
+  return _mm_cvtsi128_si32(s);
+}
+
+__attribute__((target("avx2,avxvnni"))) void l2_batch_i8_vnni(const int8_t* base,
+                                                             const int8_t* q_codes,
+                                                             const int64_t n, const int64_t dims,
+                                                             const int32_t* norm_sq, int32_t* out) {
+  int32_t q_sum = 0;
+  int32_t q_norm = 0;
+  for (int64_t d = 0; d < dims; ++d) {
+    const int32_t v = static_cast<int32_t>(q_codes[d]);
+    q_sum += v;
+    q_norm += v * v;
+  }
+  const __m256i bias = _mm256_set1_epi8(static_cast<char>(0x80));
+  int64_t i = 0;
+  for (; i + 4 <= n; i += 4) {
+    __m256i a0 = _mm256_setzero_si256();
+    __m256i a1 = _mm256_setzero_si256();
+    __m256i a2 = _mm256_setzero_si256();
+    __m256i a3 = _mm256_setzero_si256();
+    const int8_t* r0 = base + (i + 0) * dims;
+    const int8_t* r1 = base + (i + 1) * dims;
+    const int8_t* r2 = base + (i + 2) * dims;
+    const int8_t* r3 = base + (i + 3) * dims;
+    int64_t d = 0;
+    for (; d + 32 <= dims; d += 32) {
+      const __m256i qv = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(q_codes + d));
+      const __m256i u0 =
+          _mm256_xor_si256(_mm256_loadu_si256(reinterpret_cast<const __m256i*>(r0 + d)), bias);
+      const __m256i u1 =
+          _mm256_xor_si256(_mm256_loadu_si256(reinterpret_cast<const __m256i*>(r1 + d)), bias);
+      const __m256i u2 =
+          _mm256_xor_si256(_mm256_loadu_si256(reinterpret_cast<const __m256i*>(r2 + d)), bias);
+      const __m256i u3 =
+          _mm256_xor_si256(_mm256_loadu_si256(reinterpret_cast<const __m256i*>(r3 + d)), bias);
+      a0 = _mm256_dpbusd_avx_epi32(a0, u0, qv);
+      a1 = _mm256_dpbusd_avx_epi32(a1, u1, qv);
+      a2 = _mm256_dpbusd_avx_epi32(a2, u2, qv);
+      a3 = _mm256_dpbusd_avx_epi32(a3, u3, qv);
+    }
+    __m256i accs[4] = {a0, a1, a2, a3};
+    const int8_t* list[4] = {r0, r1, r2, r3};
+    for (int r = 0; r < 4; ++r) {
+      const int32_t cross = hsum_i32(accs[r]) - 128 * q_sum;
+      int32_t value = q_norm + norm_sq[i + r] - 2 * cross;
+      for (int64_t dd = d; dd < dims; ++dd) {
+        const int32_t diff = static_cast<int32_t>(list[r][dd]) - static_cast<int32_t>(q_codes[dd]);
+        value += diff * diff;
+      }
+      out[i + r] = value;
+    }
+  }
+  for (; i < n; ++i) {
+    const int8_t* row = base + i * dims;
+    int32_t cross = 0;
+    for (int64_t d = 0; d < dims; ++d) {
+      cross += static_cast<int32_t>(row[d]) * static_cast<int32_t>(q_codes[d]);
+    }
+    out[i] = q_norm + norm_sq[i] - 2 * cross;
+  }
+}
 #endif
 
 }  // namespace
@@ -402,6 +510,33 @@ void l2_batch_i8(const int8_t* base, const int8_t* q_codes, const int64_t n, con
   }
 #endif
   l2_batch_i8_scalar(base, q_codes, n, dims, out);
+}
+
+bool i8_vnni_available() {
+#if defined(MV_X86) && defined(__GNUC__) && __GNUC__ >= 12
+  static const bool allowed = []() -> bool {
+    const char* mode = ::getenv("MVDB_I8_KERNEL");
+    if (mode != nullptr && mode[0] == 'a' && mode[1] == 'v' && mode[2] == 'x' && mode[3] == '2') {
+      return false;
+    }
+    return have_avx_vnni();
+  }();
+  return allowed;
+#else
+  return false;
+#endif
+}
+
+void l2_batch_i8_norms(const int8_t* base, const int8_t* q_codes, const int64_t n,
+                       const int64_t dims, const int32_t* norm_sq, int32_t* out) {
+  if (n <= 0 || dims <= 0) return;
+  if (norm_sq != nullptr && i8_vnni_available()) {
+#if defined(MV_X86) && defined(__GNUC__) && __GNUC__ >= 12
+    l2_batch_i8_vnni(base, q_codes, n, dims, norm_sq, out);
+    return;
+#endif
+  }
+  l2_batch_i8(base, q_codes, n, dims, out);
 }
 
 }  // namespace mv

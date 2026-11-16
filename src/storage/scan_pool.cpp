@@ -475,6 +475,7 @@ struct I8Job {
   int64_t chunk = 0;
   int64_t k = 0;
   const int64_t* pks = nullptr;
+  const int32_t* norm_sq = nullptr;
   std::vector<std::vector<VecHit>>* partial = nullptr;
 };
 
@@ -501,7 +502,8 @@ void run_i8_chunk(void* opaque, int worker) {
   for (int64_t start = begin; start < end; start += kBlockRows) {
     const int64_t count = std::min<int64_t>(kBlockRows, end - start);
     const auto t0 = std::chrono::steady_clock::now();
-    l2_batch_i8(job.base + start * job.dims, job.q_codes, count, job.dims, scratch.dists.data());
+    l2_batch_i8_norms(job.base + start * job.dims, job.q_codes, count, job.dims, job.norm_sq,
+                      scratch.dists.data());
     const auto t1 = std::chrono::steady_clock::now();
     if (qtime) {
       kernel_us += std::chrono::duration<double, std::micro>(t1 - t0).count();
@@ -581,7 +583,8 @@ void run_float_chunk(void* opaque, int worker) {
 }  // namespace
 
 void l2_topk_parallel_i8(const int8_t* base, const int8_t* q_codes, int64_t n, int64_t dims,
-                         int64_t k, const int64_t* pks, std::vector<VecHit>* out) {
+                         int64_t k, const int64_t* pks, const int32_t* norm_sq,
+                         std::vector<VecHit>* out) {
   out->clear();
   if (n <= 0 || dims <= 0 || k <= 0 || base == nullptr || q_codes == nullptr) return;
   const int workers = Pool::instance().size();
@@ -594,6 +597,7 @@ void l2_topk_parallel_i8(const int8_t* base, const int8_t* q_codes, int64_t n, i
   job.chunk = (n + workers - 1) / workers;
   job.k = k;
   job.pks = pks;
+  job.norm_sq = norm_sq;
   job.partial = &partial;
   static const bool qtime = ::getenv("MVDB_QTIME") != nullptr;
   const auto started = std::chrono::steady_clock::now();

@@ -163,6 +163,39 @@ static int kernel_benchmark(const int repeats, const int rows, const int dims) {
   (void)sink8;
   std::fprintf(stderr, "[kernelbench] int8  %d x %d: best %.2f us  %.1f Gelement/s\n", rows, dims, best8,
                static_cast<double>(rows) * dims / best8 / 1000.0);
+
+  // The wide int8 kernel evaluates a different expression (a^2 + b^2 - 2ab) for the same integer sum, so
+  // it is compared against the byte-difference kernel on this data and must match exactly.
+  std::vector<int32_t> norm_sq(static_cast<size_t>(rows), 0);
+  for (int64_t row = 0; row < rows; ++row) {
+    int32_t acc = 0;
+    for (int64_t d = 0; d < dims; ++d) {
+      const int32_t v = static_cast<int32_t>(codes[static_cast<size_t>(row * dims + d)]);
+      acc += v * v;
+    }
+    norm_sq[static_cast<size_t>(row)] = acc;
+  }
+  std::vector<int32_t> wide(static_cast<size_t>(rows));
+  mv::l2_batch_i8_norms(codes.data(), q_codes.data(), rows, dims, norm_sq.data(), wide.data());
+  int64_t mismatches = 0;
+  for (int64_t row = 0; row < rows; ++row) {
+    if (wide[static_cast<size_t>(row)] != squares[static_cast<size_t>(row)]) ++mismatches;
+  }
+  std::fprintf(stderr,
+               "[kernelbench] int8 wide path used=%d, %s (mismatches=%lld of %d)\n",
+               mv::i8_vnni_available() ? 1 : 0, mismatches == 0 ? "identical to the byte kernel" : "DIFFERS",
+               static_cast<long long>(mismatches), rows);
+  if (mismatches != 0) return 1;
+  double best_wide = 1e9;
+  for (int r = 0; r < repeats; ++r) {
+    const auto started = std::chrono::steady_clock::now();
+    mv::l2_batch_i8_norms(codes.data(), q_codes.data(), rows, dims, norm_sq.data(), wide.data());
+    const double us = std::chrono::duration<double, std::micro>(
+                          std::chrono::steady_clock::now() - started).count();
+    if (us < best_wide) best_wide = us;
+  }
+  std::fprintf(stderr, "[kernelbench] int8w %d x %d: best %.2f us  %.1f Gelement/s\n", rows, dims,
+               best_wide, static_cast<double>(rows) * dims / best_wide / 1000.0);
   return 0;
 }
 
