@@ -1381,6 +1381,7 @@ Result Database::exec_select(const Stmt& st) {
         // the integer kernel, then rerank exactly and apply the same trust guard as the unfiltered path.
         const bool group_coarse = coarse_on && group->size() >= 256 && !t->cache_vecs_i8.empty();
         if (group_coarse) {
+          const auto f_start = std::chrono::steady_clock::now();
           static thread_local std::vector<int8_t> codes;
           static thread_local std::vector<int32_t> coarse_sq;
           static thread_local std::vector<int32_t> group_norms;
@@ -1397,6 +1398,7 @@ Result Database::exec_select(const Stmt& st) {
             if (code > 254) code = 254;
             q_codes[static_cast<size_t>(d)] = static_cast<int8_t>(code - 127);
           }
+          const auto fs1 = std::chrono::steady_clock::now();
           const bool have_norms = !t->cache_i8_norm_sq.empty();
           // Read the group's rows where they live when the wide kernel can do that; only fall back to
           // gathering them (160 KB of copy per query on the graded shape) when it cannot.
@@ -1415,34 +1417,66 @@ Result Database::exec_select(const Stmt& st) {
             l2_batch_i8_norms(codes.data(), q_codes.data(), static_cast<int64_t>(n), dims,
                               have_norms ? group_norms.data() : nullptr, coarse_sq.data());
           }
+          const auto fs2 = std::chrono::steady_clock::now();
           int64_t take = static_cast<int64_t>(k) * 4;
           if (take < 32) take = 32;
           if (take > static_cast<int64_t>(n)) take = static_cast<int64_t>(n);
-          // Order by (quantised distance, position in the group) and keep the first `take`. A single
-          // nth_element plus a sort of the first `take` gives exactly what a partial_sort over the whole
-          // group gives; on 1250 rows the partial_sort was the largest cost in this path.
-          static thread_local std::vector<std::pair<int32_t, int32_t>> order;
-          order.resize(n);
-          for (size_t i = 0; i < n; ++i) {
-            order[i] = std::make_pair(coarse_sq[i], static_cast<int32_t>(i));
+          // Select the best `take` of the group the way the full scan does: a running k-th distance
+          // rejects rows with one vector compare per eight, so the ordering work only ever touches a
+          // short list. (distance, position) is packed into one 64-bit key, so ordering is a plain
+          // integer compare and ties fall back to the position exactly as before.
+          static thread_local std::vector<uint64_t> order;
+          static thread_local std::vector<int32_t> survivors;
+          order.clear();
+          survivors.resize(256);
+          {
+            int32_t limit = std::numeric_limits<int32_t>::max();
+            for (size_t start = 0; start < n; start += 256) {
+              const int64_t count = static_cast<int64_t>(std::min<size_t>(256, n - start));
+              if (static_cast<int64_t>(order.size()) < take) {
+                for (int64_t i = 0; i < count; ++i) {
+                  order.push_back((static_cast<uint64_t>(static_cast<uint32_t>(coarse_sq[start + static_cast<size_t>(i)])) << 32) |
+                                  static_cast<uint64_t>(start + static_cast<size_t>(i)));
+                }
+              } else {
+                const int64_t kept = filter_le_i32_positions(coarse_sq.data() + start, count, limit,
+                                                            survivors.data());
+                for (int64_t sp = 0; sp < kept; ++sp) {
+                  const size_t at = start + static_cast<size_t>(survivors[static_cast<size_t>(sp)]);
+                  order.push_back((static_cast<uint64_t>(static_cast<uint32_t>(coarse_sq[at])) << 32) |
+                                  static_cast<uint64_t>(at));
+                }
+              }
+              if (static_cast<int64_t>(order.size()) >= take * 4) {
+                std::nth_element(order.begin(), order.begin() + take, order.end());
+                order.resize(static_cast<size_t>(take));
+                std::sort(order.begin(), order.end());
+                limit = static_cast<int32_t>(order.back() >> 32);
+              }
+            }
+            if (static_cast<int64_t>(order.size()) > take) {
+              std::nth_element(order.begin(), order.begin() + take, order.end());
+              order.resize(static_cast<size_t>(take));
+            }
+            std::sort(order.begin(), order.end());
+            take = std::min<int64_t>(take, static_cast<int64_t>(order.size()));
           }
-          if (take < static_cast<int64_t>(n)) {
-            std::nth_element(order.begin(), order.begin() + take, order.end());
-          }
-          std::sort(order.begin(), order.begin() + take);
+          const auto fs3 = std::chrono::steady_clock::now();
           static thread_local std::vector<float> block;
           static thread_local std::vector<float> exact;
           block.resize(static_cast<size_t>(take) * static_cast<size_t>(dims));
           exact.resize(static_cast<size_t>(take));
           for (int64_t ti = 0; ti < take; ++ti) {
-            const int64_t src = static_cast<int64_t>((*group)[static_cast<size_t>(order[static_cast<size_t>(ti)].second)]);
+            const int64_t src = static_cast<int64_t>(
+                (*group)[static_cast<size_t>(order[static_cast<size_t>(ti)] & 0xFFFFFFFFu)]);
             std::memcpy(block.data() + ti * dims, t->cache_vecs.data() + src * dims,
                         static_cast<size_t>(dims) * sizeof(float));
           }
           l2_batch_sq(block.data(), q, take, dims, exact.data());
           double boundary = 0.0;
           for (int64_t ti = 0; ti < take; ++ti) {
-            const int64_t src = static_cast<int64_t>((*group)[static_cast<size_t>(order[static_cast<size_t>(ti)].second)]);
+            const int64_t src = static_cast<int64_t>(
+                (*group)[static_cast<size_t>(order[static_cast<size_t>(ti)] & 0xFFFFFFFFu)]);
             const double d = static_cast<double>(exact[static_cast<size_t>(ti)]);
             if (d > boundary) boundary = d;
             const int64_t pk = t->cache_pks[static_cast<size_t>(src)];
@@ -1474,6 +1508,17 @@ Result Database::exec_select(const Stmt& st) {
                 return r;
               }
               r.rows.push_back(std::move(line));
+            }
+            if (qtime) {
+              const auto f_end = std::chrono::steady_clock::now();
+              auto us = [](const std::chrono::steady_clock::time_point& a,
+                           const std::chrono::steady_clock::time_point& b) {
+                return std::chrono::duration<double, std::micro>(b - a).count();
+              };
+              std::fprintf(stderr,
+                           "[fcoarse] pre=%.1f enc=%.1f scan=%.1f sel=%.1f rest=%.1f total=%.1f n=%zu\n",
+                           us(qt_entry, f_start), us(f_start, fs1), us(fs1, fs2), us(fs2, fs3),
+                           us(fs3, f_end), us(qt_entry, f_end), n);
             }
             return r;
           }

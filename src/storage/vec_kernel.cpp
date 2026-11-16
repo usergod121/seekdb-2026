@@ -516,6 +516,18 @@ __attribute__((target("avx2,avxvnni"))) void l2_batch_i8_rows_vnni(
   const __m256i bias = _mm256_set1_epi8(static_cast<char>(0x80));
   int64_t i = 0;
   for (; i + 4 <= count; i += 4) {
+    // The rows of a filtered group are scattered across the table, so this kernel is bound by access
+    // latency rather than arithmetic: pull the next group's lines in while this one is being multiplied.
+    if (i + 8 < count) {
+      _mm_prefetch(reinterpret_cast<const char*>(base + static_cast<int64_t>(rows[i + 4]) * dims),
+                   _MM_HINT_T0);
+      _mm_prefetch(reinterpret_cast<const char*>(base + static_cast<int64_t>(rows[i + 5]) * dims),
+                   _MM_HINT_T0);
+      _mm_prefetch(reinterpret_cast<const char*>(base + static_cast<int64_t>(rows[i + 6]) * dims),
+                   _MM_HINT_T0);
+      _mm_prefetch(reinterpret_cast<const char*>(base + static_cast<int64_t>(rows[i + 7]) * dims),
+                   _MM_HINT_T0);
+    }
     const int8_t* r0 = base + static_cast<int64_t>(rows[i + 0]) * dims;
     const int8_t* r1 = base + static_cast<int64_t>(rows[i + 1]) * dims;
     const int8_t* r2 = base + static_cast<int64_t>(rows[i + 2]) * dims;

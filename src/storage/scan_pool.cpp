@@ -619,6 +619,11 @@ void l2_topk_parallel_i8(const int8_t* base, const int8_t* q_codes, int64_t n, i
 
 int scan_worker_count() { return Pool::instance().size(); }
 
+int64_t filter_le_i32_positions(const int32_t* values, const int64_t count, const int32_t limit,
+                                int32_t* out) {
+  return filter_le_i32(values, count, limit, out);
+}
+
 void l2_topk_parallel(const float* base, const float* q, int64_t n, int64_t dims, int64_t k,
                       const int64_t* pks, KeepRowFn keep, const void* keep_ctx,
                       std::vector<VecHit>* out) {

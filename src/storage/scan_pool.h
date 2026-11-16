@@ -43,4 +43,8 @@ void l2_topk_parallel(const float* base, const float* q, int64_t n, int64_t dims
                       const int64_t* pks, KeepRowFn keep, const void* keep_ctx,
                       std::vector<VecHit>* out);
 
+// Positions of the entries at or below `limit`, eight comparisons per instruction when AVX2 is present.
+// Exported because the filtered TopK needs the same survivor filter the scans use.
+int64_t filter_le_i32_positions(const int32_t* values, int64_t count, int32_t limit, int32_t* out);
+
 }  // namespace mv
